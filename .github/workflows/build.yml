@@ -1,71 +1,35 @@
-name: MizKernel-A23-Absolute-Fix
+name: MizKernel-Kconfig-Test
 on:
   workflow_dispatch:
 
 jobs:
-  build:
+  test:
     runs-on: ubuntu-22.04
     steps:
-      - name: 1. Install Dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y bc bison build-essential ccache curl flex g++-multilib gcc-multilib git gnupg gperf libelf-dev liblz4-tool libncurses-dev libsdl1.2-dev libssl-dev libxml2 libxml2-utils lzop rsync squashfs-tools xsltproc zip zlib1g-dev python3 binutils-aarch64-linux-gnu device-tree-compiler
-          sudo ln -sf /usr/bin/python3 /usr/bin/python
+      - name: 1. Setup Environment
+        run: sudo apt-get install -y bc bison flex libssl-dev
 
-      - name: 2. Setup Filesystem
+      - name: 2. Checkout & Absolute Patching
         run: |
-          # 1. Checkout Kernel
           git clone --depth=1 https://github.com/${{ github.repository }} kernel
           
-          # 2. Setup Toolchain in an ABSOLUTE location
-          mkdir -p $GITHUB_WORKSPACE/toolchain
-          git clone --depth=1 https://github.com/kdrag0n/proton-clang.git $GITHUB_WORKSPACE/toolchain/clang-r416183b
-          
-          # 3. Setup KernelSU (Wipe first to prevent 'File Exists' error)
+          # 1. Force KernelSU into place
           rm -rf kernel/drivers/kernelsu
           git clone --depth=1 https://github.com/rifsxd/KernelSU-Next kernel/drivers/kernelsu
+          
+          # 2. THE FIX: Change the hardcoded Kconfig line to an ABSOLUTE path
+          # We tell the kernel exactly where the file is on the SSD
+          KSU_ABS_PATH="$GITHUB_WORKSPACE/kernel/drivers/kernelsu/Kconfig"
+          sed -i "s|source \"drivers/kernelsu/Kconfig\"|source \"$KSU_ABS_PATH\"|g" kernel/drivers/Kconfig
+          
+          # 3. Create a fake toolchain so defconfig doesn't crash
+          mkdir -p kernel/toolchain/clang-r416183b/bin
+          touch kernel/toolchain/clang-r416183b/bin/clang
+          chmod +x kernel/toolchain/clang-r416183b/bin/clang
 
-      - name: 3. The "One-Shot" Build
+      - name: 3. Verify Defconfig (The Test)
         run: |
           cd kernel
           mkdir -p out
-          
-          # Define the ABSOLUTE path to the compiler
-          TC_PATH=$GITHUB_WORKSPACE/toolchain/clang-r416183b/bin
-          
-          # Pass the absolute path directly to make. 
-          # This OVERRIDES the broken ../toolchain hardcoding in the source.
-          BUILD_ARGS="O=out \
-                      ARCH=arm64 \
-                      CC=$TC_PATH/clang \
-                      LD=$TC_PATH/ld.lld \
-                      AR=$TC_PATH/llvm-ar \
-                      NM=$TC_PATH/llvm-nm \
-                      OBJCOPY=$TC_PATH/llvm-objcopy \
-                      OBJDUMP=$TC_PATH/llvm-objdump \
-                      STRIP=$TC_PATH/llvm-strip \
-                      CROSS_COMPILE=aarch64-linux-gnu- \
-                      CROSS_COMPILE_ARM32=arm-linux-gnueabi- \
-                      LLVM=1 \
-                      LLVM_IAS=0"
-
-          # Step A: Defconfig
-          make $BUILD_ARGS vendor/a23_eur_open_mizkernel_defconfig
-          
-          # Step B: Compile
-          make -j$(nproc) $BUILD_ARGS
-
-      - name: 4. Package
-        run: |
-          git clone --depth=1 https://github.com/osm0sis/AnyKernel3.git AnyKernel3
-          cd AnyKernel3
-          sed -i 's/do.devicecheck=1/do.devicecheck=0/g' anykernel.sh
-          sed -i 's!block=.*!block=auto;!g' anykernel.sh
-          cp ../kernel/out/arch/arm64/boot/Image* . || true
-          zip -r9 ../MizKernel-A23.zip * -x .git README.md
-
-      - name: 5. Upload
-        uses: actions/upload-artifact@v4
-        with:
-          name: MizKernel-A23
-          path: MizKernel-A23.zip
+          # We only run the config phase to see if it finally 'sees' KernelSU
+          make O=out ARCH=arm64 vendor/a23_eur_open_mizkernel_defconfig
