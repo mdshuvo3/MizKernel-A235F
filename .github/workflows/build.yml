@@ -1,4 +1,4 @@
-name: MizKernel-A23-Auto-Fixer
+name: MizKernel-A23-Deep-Fixer
 on:
   workflow_dispatch:
 
@@ -14,44 +14,38 @@ jobs:
 
       - name: 2. Checkout & Toolchain
         run: |
-          # Clone your kernel source
           git clone --depth=1 https://github.com/${{ github.repository }} kernel
-          # Clone the Proton Clang toolchain
           mkdir -p toolchain/clang-r416183b
           git clone --depth=1 https://github.com/kdrag0n/proton-clang.git toolchain/clang-r416183b
 
       - name: 3. Precision KernelSU-Next Injection
         run: |
-          # 1. Clone KernelSU-Next to a temporary folder
           git clone --depth=1 https://github.com/rifsxd/KernelSU-Next ksu_neutral
-          
-          # 2. Recreate the target directory in your kernel drivers
           rm -rf kernel/drivers/kernelsu
           mkdir -p kernel/drivers/kernelsu
-          
-          # 3. Sync ONLY the 'kernel' subfolder from the Next repo into your drivers
-          # This ensures Kconfig is at drivers/kernelsu/Kconfig
           rsync -av ksu_neutral/kernel/ kernel/drivers/kernelsu/
 
-      - name: 4. The "MizKernel" Auto-Fixer
+      - name: 4. Deep Manual Patching
         run: |
           cd kernel
-          # A. Safely Inject KernelSU into the drivers Kconfig
+          # A. Kconfig & Makefile
           if ! grep -q "kernelsu/Kconfig" drivers/Kconfig; then
-            # This inserts the source line right before the first 'endmenu' it finds
             sed -i '/endmenu/i source "drivers/kernelsu/Kconfig"' drivers/Kconfig
           fi
-          
-          # B. Inject KernelSU into the drivers Makefile
           if ! grep -q "kernelsu/" drivers/Makefile; then
             echo 'obj-y += kernelsu/' >> drivers/Makefile
           fi
 
-          # C. REPAIR: Force local header discovery (Prevents 'ksu.h' not found)
+          # B. Force Include Path
           echo "ccflags-y += -I\$(srctree)/drivers/kernelsu" >> drivers/kernelsu/Makefile
-          
-          # D. REPAIR: Rename conflicting VFS functions common in Samsung/Next builds
-          # This prevents "redefinition" or "multiple definition" errors
+
+          # C. REPAIR: The "Missing Hook" Fix
+          # We need to tell the kernel that KernelSU exists by patching the Filesystem
+          # This adds the necessary hooks into fs/read_write.c
+          sed -i '/extern ssize_t vfs_read/i #include "../drivers/kernelsu/allowlist.h"' fs/read_write.c
+          sed -i '/if (unlikely(ret >= 0))/i \	ksu_handle_allowlist(file, buf, count, &ret);' fs/read_write.c
+
+          # D. REPAIR: KernelSU-Next Symbol Renaming
           find drivers/kernelsu -name "*.c" -exec sed -i 's/vfs_stat(/ksu_vfs_stat(/g' {} +
           find drivers/kernelsu -name "*.c" -exec sed -i 's/vfs_fstatat(/ksu_vfs_fstatat(/g' {} +
 
@@ -59,8 +53,6 @@ jobs:
         run: |
           cd $GITHUB_WORKSPACE/kernel
           TC_PATH=$GITHUB_WORKSPACE/toolchain/clang-r416183b/bin
-          
-          # Add Clang to PATH
           export PATH="$TC_PATH:$PATH"
           
           BUILD_ARGS="ARCH=arm64 \
@@ -76,36 +68,25 @@ jobs:
                       LLVM=1 \
                       LLVM_IAS=0"
 
-          # Step A: Load the A23 defconfig
           make $BUILD_ARGS vendor/a23_eur_open_mizkernel_defconfig
-          
-          # Step B: Force KernelSU to be enabled in the final .config
           echo "CONFIG_KSU=y" >> .config
           make $BUILD_ARGS olddefconfig
           
-          # Step C: Final compilation (will show error details if it fails)
-          make -j$(nproc) $BUILD_ARGS || (echo "❌ BUILD FAILED! Scroll up to find the 'error:' keyword." && exit 1)
+          # We use -j$(nproc) but if it fails, we rerun with -j1 to catch the EXACT error
+          make -j$(nproc) $BUILD_ARGS || make -j1 $BUILD_ARGS
 
       - name: 6. Package AnyKernel3
         run: |
           cd $GITHUB_WORKSPACE
           git clone --depth=1 https://github.com/osm0sis/AnyKernel3.git AnyKernel3
           cd AnyKernel3
-          # Configure for generic deployment
           sed -i 's/do.devicecheck=1/do.devicecheck=0/g' anykernel.sh
           sed -i 's!block=.*!block=auto;!g' anykernel.sh
-          
-          # Copy the compiled Image.gz (or Image)
-          if [ -f "../kernel/arch/arm64/boot/Image.gz" ]; then
-            cp ../kernel/arch/arm64/boot/Image.gz .
-          elif [ -f "../kernel/arch/arm64/boot/Image" ]; then
-            cp ../kernel/arch/arm64/boot/Image .
-          fi
-          
-          zip -r9 ../MizKernel-A23-KSU.zip * -x .git README.md
+          cp ../kernel/arch/arm64/boot/Image* . || true
+          zip -r9 ../MizKernel-A23.zip * -x .git README.md
 
       - name: 7. Upload Result
         uses: actions/upload-artifact@v4
         with:
-          name: MizKernel-A23-KSU-Next
-          path: MizKernel-A23-KSU.zip
+          name: MizKernel-A23
+          path: MizKernel-A23.zip
