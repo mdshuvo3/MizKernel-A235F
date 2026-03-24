@@ -1,4 +1,4 @@
-name: MizKernel-A23-Kconfig-Bypass
+name: MizKernel-A23-Manual-KSU
 on:
   workflow_dispatch:
 
@@ -18,23 +18,32 @@ jobs:
           mkdir -p toolchain/clang-r416183b
           git clone --depth=1 https://github.com/kdrag0n/proton-clang.git toolchain/clang-r416183b
 
-      - name: 3. The Bypass Patch
+      - name: 3. Manual KernelSU Injection
         run: |
+          cd $GITHUB_WORKSPACE/kernel/drivers
+          # 1. Wipe any existing mess
+          rm -rf kernelsu
+          mkdir -p kernelsu
+          
+          # 2. Download and Extract manually (Bypasses git nesting)
+          curl -LSs https://github.com/rifsxd/KernelSU-Next/archive/refs/heads/main.zip -o ksu.zip
+          unzip -q ksu.zip
+          
+          # 3. Move contents from the versioned folder to exactly 'kernelsu'
+          cp -r KernelSU-Next-main/* kernelsu/
+          rm -rf KernelSU-Next-main ksu.zip
+          
+          # 4. VERIFY - If this fails, we stop before wasting time on make
+          if [ ! -f "kernelsu/Kconfig" ]; then
+            echo "CRITICAL: Kconfig still missing! Printing folder content:"
+            ls -R kernelsu
+            exit 1
+          fi
+          
+          # 5. Patch Kconfig (Delete line 4 and append to end)
           cd $GITHUB_WORKSPACE/kernel
-          
-          # 1. Force KernelSU into the drivers folder
-          rm -rf drivers/kernelsu
-          git clone --depth=1 https://github.com/rifsxd/KernelSU-Next drivers/kernelsu
-          
-          # 2. DELETE the problematic line 4 that keeps failing
           sed -i '4d' drivers/Kconfig
-          
-          # 3. APPEND the instruction to the VERY END of the file instead
-          # This avoids any "can't open" errors at the top of the file
           echo 'source "drivers/kernelsu/Kconfig"' >> drivers/Kconfig
-          
-          # 4. Debug Check (So we can see if the file is actually there)
-          ls -l drivers/kernelsu/Kconfig
 
       - name: 4. The Build
         run: |
@@ -57,7 +66,7 @@ jobs:
           make $BUILD_ARGS vendor/a23_eur_open_mizkernel_defconfig
           make -j$(nproc) $BUILD_ARGS
 
-      - name: 5. Package
+      - name: 5. Package & Upload
         run: |
           cd $GITHUB_WORKSPACE
           git clone --depth=1 https://github.com/osm0sis/AnyKernel3.git AnyKernel3
