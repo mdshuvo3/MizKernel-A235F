@@ -1,4 +1,4 @@
-name: MizKernel-A23-Neutral-Clone
+name: MizKernel-A23-Path-Clearer
 on:
   workflow_dispatch:
 
@@ -14,36 +14,35 @@ jobs:
 
       - name: 2. Checkout & Toolchain
         run: |
-          # 1. Checkout Kernel
           git clone --depth=1 https://github.com/${{ github.repository }} kernel
-          # 2. Setup Toolchain in root
           mkdir -p toolchain/clang-r416183b
           git clone --depth=1 https://github.com/kdrag0n/proton-clang.git toolchain/clang-r416183b
 
-      - name: 3. Neutral Ground KernelSU Injection
+      - name: 3. Nuclear KernelSU Injection
         run: |
-          # 1. Clone to a completely separate folder in $GITHUB_WORKSPACE
+          # 1. Clone to neutral ground
           git clone --depth=1 https://github.com/rifsxd/KernelSU-Next ksu_neutral
           
-          # 2. Force create the target directory in the kernel
-          mkdir -p kernel/drivers/kernelsu
+          # 2. FORCE DELETE any existing kernelsu entry (link, file, or folder)
+          rm -rf kernel/drivers/kernelsu
           
-          # 3. Use RSYNC to merge the files (bypass all git/permission/nesting issues)
+          # 3. Create fresh directory and sync
+          mkdir -p kernel/drivers/kernelsu
           rsync -av ksu_neutral/ kernel/drivers/kernelsu/
           
-          # 4. Final Path Verification
+          # 4. Verify path
           if [ -f "kernel/drivers/kernelsu/Kconfig" ]; then
             echo "✅ SUCCESS: Kconfig found at kernel/drivers/kernelsu/Kconfig"
           else
-            echo "❌ ERROR: File still missing! Printing root structure:"
-            ls -R ksu_neutral
+            echo "❌ ERROR: File still missing!"
             exit 1
           fi
 
       - name: 4. Patch Kconfig
         run: |
           cd kernel
-          # Remove the problematic line 4 and append to end
+          # Remove problematic line 4 (source "drivers/kernelsu/Kconfig")
+          # and append a fresh version to the end of the file.
           sed -i '4d' drivers/Kconfig
           echo 'source "drivers/kernelsu/Kconfig"' >> drivers/Kconfig
 
