@@ -1,4 +1,4 @@
-name: MizKernel-A23-Manual-KSU
+name: MizKernel-A23-Neutral-Clone
 on:
   workflow_dispatch:
 
@@ -14,38 +14,40 @@ jobs:
 
       - name: 2. Checkout & Toolchain
         run: |
+          # 1. Checkout Kernel
           git clone --depth=1 https://github.com/${{ github.repository }} kernel
+          # 2. Setup Toolchain in root
           mkdir -p toolchain/clang-r416183b
           git clone --depth=1 https://github.com/kdrag0n/proton-clang.git toolchain/clang-r416183b
 
-      - name: 3. Manual KernelSU Injection
+      - name: 3. Neutral Ground KernelSU Injection
         run: |
-          cd $GITHUB_WORKSPACE/kernel/drivers
-          # 1. Wipe any existing mess
-          rm -rf kernelsu
-          mkdir -p kernelsu
+          # 1. Clone to a completely separate folder in $GITHUB_WORKSPACE
+          git clone --depth=1 https://github.com/rifsxd/KernelSU-Next ksu_neutral
           
-          # 2. Download and Extract manually (Bypasses git nesting)
-          curl -LSs https://github.com/rifsxd/KernelSU-Next/archive/refs/heads/main.zip -o ksu.zip
-          unzip -q ksu.zip
+          # 2. Force create the target directory in the kernel
+          mkdir -p kernel/drivers/kernelsu
           
-          # 3. Move contents from the versioned folder to exactly 'kernelsu'
-          cp -r KernelSU-Next-main/* kernelsu/
-          rm -rf KernelSU-Next-main ksu.zip
+          # 3. Use RSYNC to merge the files (bypass all git/permission/nesting issues)
+          rsync -av ksu_neutral/ kernel/drivers/kernelsu/
           
-          # 4. VERIFY - If this fails, we stop before wasting time on make
-          if [ ! -f "kernelsu/Kconfig" ]; then
-            echo "CRITICAL: Kconfig still missing! Printing folder content:"
-            ls -R kernelsu
+          # 4. Final Path Verification
+          if [ -f "kernel/drivers/kernelsu/Kconfig" ]; then
+            echo "✅ SUCCESS: Kconfig found at kernel/drivers/kernelsu/Kconfig"
+          else
+            echo "❌ ERROR: File still missing! Printing root structure:"
+            ls -R ksu_neutral
             exit 1
           fi
-          
-          # 5. Patch Kconfig (Delete line 4 and append to end)
-          cd $GITHUB_WORKSPACE/kernel
+
+      - name: 4. Patch Kconfig
+        run: |
+          cd kernel
+          # Remove the problematic line 4 and append to end
           sed -i '4d' drivers/Kconfig
           echo 'source "drivers/kernelsu/Kconfig"' >> drivers/Kconfig
 
-      - name: 4. The Build
+      - name: 5. Execute Build
         run: |
           cd $GITHUB_WORKSPACE/kernel
           TC_PATH=$GITHUB_WORKSPACE/toolchain/clang-r416183b/bin
@@ -66,9 +68,8 @@ jobs:
           make $BUILD_ARGS vendor/a23_eur_open_mizkernel_defconfig
           make -j$(nproc) $BUILD_ARGS
 
-      - name: 5. Package & Upload
+      - name: 6. Package AnyKernel3
         run: |
-          cd $GITHUB_WORKSPACE
           git clone --depth=1 https://github.com/osm0sis/AnyKernel3.git AnyKernel3
           cd AnyKernel3
           sed -i 's/do.devicecheck=1/do.devicecheck=0/g' anykernel.sh
@@ -76,7 +77,7 @@ jobs:
           cp ../kernel/arch/arm64/boot/Image* . || true
           zip -r9 ../MizKernel-A23.zip * -x .git README.md
 
-      - name: 6. Upload
+      - name: 7. Upload Result
         uses: actions/upload-artifact@v4
         with:
           name: MizKernel-A23
