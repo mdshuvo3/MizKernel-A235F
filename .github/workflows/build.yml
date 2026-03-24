@@ -5,12 +5,13 @@ on:
 jobs:
   build:
     name: Build Kernel
-    runs-on: ubuntu-latest
+    # CHANGED: Using 22.04 to match Proton-Clang compatibility
+    runs-on: ubuntu-22.04
     steps:
       - name: 1. Install Build Dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y bc bison build-essential ccache curl flex g++-multilib gcc-multilib git gnupg gperf libelf-dev liblz4-tool libncurses-dev libsdl1.2-dev libssl-dev libxml2 libxml2-utils lzop rsync squashfs-tools xsltproc zip zlib1g-dev python3
+          sudo apt-get install -y bc bison build-essential ccache curl flex g++-multilib gcc-multilib git gnupg gperf libelf-dev liblz4-tool libncurses5-dev libsdl1.2-dev libssl-dev libxml2 libxml2-utils lzop rsync squashfs-tools xsltproc zip zlib1g-dev python3
 
       - name: 2. Checkout Kernel Source
         uses: actions/checkout@v4
@@ -32,9 +33,23 @@ jobs:
       - name: 5. Compile the Kernel
         run: |
           cd kernel
+          # Link the hardcoded toolchain path to our actual clang folder
+          mkdir -p toolchain
+          ln -s $GITHUB_WORKSPACE/clang toolchain/clang-r416183b
+          
           export PATH="$GITHUB_WORKSPACE/clang/bin:$PATH"
+          
           make O=out ARCH=arm64 vendor/a23_eur_open_mizkernel_defconfig
-          make -j$(nproc) O=out ARCH=arm64 CC=clang HOSTCC=clang HOSTCXX=clang++ CROSS_COMPILE=aarch64-linux-gnu- CROSS_COMPILE_ARM32=arm-linux-gnueabi- LLVM=1 LLVM_IAS=1
+          
+          # Added Real-time LLVM overrides
+          make -j$(nproc) O=out ARCH=arm64 \
+            CC=clang \
+            HOSTCC=gcc \
+            HOSTCXX=g++ \
+            CROSS_COMPILE=aarch64-linux-gnu- \
+            CROSS_COMPILE_ARM32=arm-linux-gnueabi- \
+            LLVM=1 \
+            LLVM_IAS=1
 
       - name: 6. Create Flashable Zip
         run: |
