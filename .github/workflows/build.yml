@@ -10,7 +10,7 @@ jobs:
       - name: 1. Install Build Dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y bc bison build-essential ccache curl flex g++-multilib gcc-multilib git gnupg gperf lib32ncurses5-dev lib32z1-dev libelf-dev liblz4-tool libncurses5-dev libsdl1.2-dev libssl-dev libxml2 libxml2-utils lzop rsync squashfs-tools xsltproc zip zlib1g-dev python3
+          sudo apt-get install -y bc bison build-essential ccache curl flex g++-multilib gcc-multilib git gnupg gperf libelf-dev liblz4-tool libncurses-dev libsdl1.2-dev libssl-dev libxml2 libxml2-utils lzop rsync squashfs-tools xsltproc zip zlib1g-dev python3
 
       - name: 2. Checkout Kernel Source
         uses: actions/checkout@v4
@@ -22,9 +22,7 @@ jobs:
       - name: 3. Fix KernelSU Broken Symlink
         run: |
           cd kernel/drivers
-          # Delete the broken 47-byte shortcut file
           rm -f kernelsu
-          # Download the actual KernelSU-Next code into a real folder
           git clone https://github.com/rifsxd/KernelSU-Next kernelsu
 
       - name: 4. Download Proton-Clang
@@ -34,33 +32,24 @@ jobs:
       - name: 5. Compile the Kernel
         run: |
           cd kernel
-          # Tell the system where our compiler is
           export PATH="$GITHUB_WORKSPACE/clang/bin:$PATH"
-          
-          # Setup the configuration file
           make O=out ARCH=arm64 vendor/a23_eur_open_mizkernel_defconfig
-          
-          # Run the actual build command with LLVM variables
           make -j$(nproc) O=out ARCH=arm64 CC=clang HOSTCC=clang HOSTCXX=clang++ CROSS_COMPILE=aarch64-linux-gnu- CROSS_COMPILE_ARM32=arm-linux-gnueabi- LLVM=1 LLVM_IAS=1
 
       - name: 6. Create Flashable Zip
         run: |
           git clone https://github.com/osm0sis/AnyKernel3.git AnyKernel3
-          
-          # Force AnyKernel3 to ignore device checks so it flashes successfully on your A23
           sed -i 's/do.devicecheck=1/do.devicecheck=0/g' AnyKernel3/anykernel.sh
-          # Tell it to automatically find your boot partition
           sed -i 's!block=.*!block=auto;!g' AnyKernel3/anykernel.sh
-          
-          # Copy our newly built kernel into the zip folder
           cp kernel/out/arch/arm64/boot/Image AnyKernel3/
-          
-          # Package everything into a flashable zip
           cd AnyKernel3
           zip -r9 ../AnyKernel3-MizKernel-A23.zip * -x .git README.md *placeholder
 
       - name: 7. Upload Flashable Zip
         uses: actions/upload-artifact@v4
+        with:
+          name: Flashable-MizKernel-A23
+          path: AnyKernel3-MizKernel-A23.zip        uses: actions/upload-artifact@v4
         with:
           name: Flashable-MizKernel-A23
           path: AnyKernel3-MizKernel-A23.zip
