@@ -1,4 +1,4 @@
-name: MizKernel-A23-Force-Merge
+name: MizKernel-A23-Root-Anchor
 on:
   workflow_dispatch:
 
@@ -16,30 +16,29 @@ jobs:
         run: |
           git clone --depth=1 https://github.com/${{ github.repository }} kernel
           
-          # Setup Toolchain exactly where the Makefile wants it (../toolchain)
+          # Setup Toolchain in root so ../toolchain works
           mkdir -p toolchain/clang-r416183b
           git clone --depth=1 https://github.com/kdrag0n/proton-clang.git toolchain/clang-r416183b
 
-      - name: 3. The Force-Merge Fix
+      - name: 3. The Root-Anchor Fix
         run: |
-          # 1. Clone KernelSU to a temporary spot
-          git clone --depth=1 https://github.com/rifsxd/KernelSU-Next ksu_source
+          cd kernel
+          # 1. Clone KernelSU into the ROOT of the kernel (not drivers)
+          rm -rf kernelsu
+          git clone --depth=1 https://github.com/rifsxd/KernelSU-Next kernelsu
           
-          # 2. FORCE create the directory and MOVE files (bypass git link issues)
-          rm -rf kernel/drivers/kernelsu
-          mkdir -p kernel/drivers/kernelsu
-          cp -r ksu_source/* kernel/drivers/kernelsu/
+          # 2. Update drivers/Kconfig to look at the ROOT folder
+          # This is a standard 'source' path that always works from any subdirectory
+          sed -i 's|source "drivers/kernelsu/Kconfig"|source "kernelsu/Kconfig"|g' drivers/Kconfig
           
-          # 3. Patch the Kconfig to use a RELATIVE path from the drivers root
-          # This bypasses the parser getting lost in subdirectories
-          cd kernel/drivers
-          sed -i 's|source "drivers/kernelsu/Kconfig"|source "kernelsu/Kconfig"|g' Kconfig
+          # 3. Update drivers/Makefile to find the ROOT folder
+          # We tell the makefile to look one level up from drivers/
+          sed -i 's|obj-y += kernelsu/|obj-y += ../kernelsu/|g' drivers/Makefile
 
       - name: 4. The In-Tree Build
         run: |
           cd kernel
           
-          # Absolute path for compiler
           TC_PATH=$GITHUB_WORKSPACE/toolchain/clang-r416183b/bin
           
           BUILD_ARGS="ARCH=arm64 \
@@ -61,7 +60,7 @@ jobs:
           # Step B: Compile
           make -j$(nproc) $BUILD_ARGS
 
-      - name: 5. Package
+      - name: 5. Package AnyKernel3
         run: |
           git clone --depth=1 https://github.com/osm0sis/AnyKernel3.git AnyKernel3
           cd AnyKernel3
