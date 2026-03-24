@@ -5,43 +5,46 @@ on:
 jobs:
   build:
     name: Build Kernel
-    # CHANGED: Using 22.04 to match Proton-Clang compatibility
     runs-on: ubuntu-22.04
     steps:
-      - name: 1. Install Build Dependencies
+      - name: 1. Install Required Build Dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y bc bison build-essential ccache curl flex g++-multilib gcc-multilib git gnupg gperf libelf-dev liblz4-tool libncurses5-dev libsdl1.2-dev libssl-dev libxml2 libxml2-utils lzop rsync squashfs-tools xsltproc zip zlib1g-dev python3
+          sudo apt-get install -y bc bison build-essential ccache curl flex g++-multilib gcc-multilib git gnupg gperf libelf-dev liblz4-tool libncurses5-dev libsdl1.2-dev libssl-dev libxml2 libxml2-utils lzop rsync squashfs-tools xsltproc zip zlib1g-dev python3 binutils binutils-aarch64-linux-gnu binutils-arm-linux-gnueabi
 
-      - name: 2. Checkout Kernel Source
+      - name: 2. Checkout Kernel Source (With All Hidden Modules)
         uses: actions/checkout@v4
         with:
           repository: ${{ github.repository }}
           ref: main
           path: kernel
+          submodules: recursive
+          fetch-depth: 1
 
-      - name: 3. Fix KernelSU Broken Symlink
+      - name: 3. Satisfy Hardcoded Paths & Fix KernelSU
         run: |
+          # The developer hardcoded "../toolchain/clang-r416183b". 
+          # We create this exact folder structure in the workspace.
+          mkdir -p toolchain
+          git clone --depth=1 https://github.com/kdrag0n/proton-clang.git toolchain/clang-r416183b
+          
+          # Fix the broken KernelSU shortcut with actual code
           cd kernel/drivers
           rm -f kernelsu
           git clone https://github.com/rifsxd/KernelSU-Next kernelsu
 
-      - name: 4. Download Proton-Clang
-        run: |
-          git clone --depth=1 https://github.com/kdrag0n/proton-clang.git clang
-
-      - name: 5. Compile the Kernel
+      - name: 4. Compile the Kernel
         run: |
           cd kernel
-          # Link the hardcoded toolchain path to our actual clang folder
-          mkdir -p toolchain
-          ln -s $GITHUB_WORKSPACE/clang toolchain/clang-r416183b
           
-          export PATH="$GITHUB_WORKSPACE/clang/bin:$PATH"
+          # Make absolutely sure the system sees the compiler
+          export PATH="$GITHUB_WORKSPACE/toolchain/clang-r416183b/bin:$PATH"
           
+          # Step A: Generate the configuration
           make O=out ARCH=arm64 vendor/a23_eur_open_mizkernel_defconfig
           
-          # Added Real-time LLVM overrides
+          # Step B: Execute the build with aggressive overrides
+          # We force HOSTCC to gcc to prevent host-script crashes
           make -j$(nproc) O=out ARCH=arm64 \
             CC=clang \
             HOSTCC=gcc \
@@ -51,17 +54,28 @@ jobs:
             LLVM=1 \
             LLVM_IAS=1
 
-      - name: 6. Create Flashable Zip
+      - name: 5. Package AnyKernel3 for Galaxy A23
         run: |
           git clone https://github.com/osm0sis/AnyKernel3.git AnyKernel3
-          sed -i 's/do.devicecheck=1/do.devicecheck=0/g' AnyKernel3/anykernel.sh
-          sed -i 's!block=.*!block=auto;!g' AnyKernel3/anykernel.sh
-          cp kernel/out/arch/arm64/boot/Image AnyKernel3/
           cd AnyKernel3
-          zip -r9 ../AnyKernel3-MizKernel-A23.zip * -x .git README.md *placeholder
-
-      - name: 7. Upload Flashable Zip
+          
+          # Remove strict device checks so TWRP doesn't block the installation
+          sed -i 's/do.devicecheck=1/do.devicecheck=0/g' anykernel.sh
+          # Tell AK3 to auto-detect the boot partition
+          sed -i 's!block=.*!block=auto;!g' anykernel.sh
+          # Add A23 codenames just in case it falls back to checking
+          sed -i 's/device.name1=.*/device.name1=a23/g' anykernel.sh
+          sed -i 's/device.name2=.*/device.name2=a235f/g' anykernel.sh
+          sed -i 's/device.name3=.*/device.name3=a23x/g' anykernel.sh
+          
+          # Bring in the freshly built kernel image
+          cp ../kernel/out/arch/arm64/boot/Image .
+          
+          # Zip it all up
+          zip -r9 ../MizKernel-A23-Flashable.zip * -x .git README.md *placeholder
+          
+      - name: 6. Upload Final Zip
         uses: actions/upload-artifact@v4
         with:
-          name: Flashable-MizKernel-A23
-          path: AnyKernel3-MizKernel-A23.zip
+          name: MizKernel-A23-Flashable
+          path: MizKernel-A23-Flashable.zip
