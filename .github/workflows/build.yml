@@ -104,22 +104,3 @@ jobs:
         with:
           name: MizKernel-A23
           path: ${{ github.workspace }}/MizKernel-A23-Sandboxed.zip
-          sed -i 's/do.devicecheck=1/do.devicecheck=0/g' anykernel.sh
-          # Tell AK3 to auto-detect the boot partition
-          sed -i 's!block=.*!block=auto;!g' anykernel.sh
-          # Add A23 codenames just in case it falls back to checking
-          sed -i 's/device.name1=.*/device.name1=a23/g' anykernel.sh
-          sed -i 's/device.name2=.*/device.name2=a235f/g' anykernel.sh
-          sed -i 's/device.name3=.*/device.name3=a23x/g' anykernel.sh
-          
-          # Bring in the freshly built kernel image
-          cp ../kernel/out/arch/arm64/boot/Image .
-          
-          # Zip it all up
-          zip -r9 ../MizKernel-A23-Flashable.zip * -x .git README.md *placeholder
-          
-      - name: 6. Upload Final Zip
-        uses: actions/upload-artifact@v4
-        with:
-          name: MizKernel-A23-Flashable
-          path: MizKernel-A23-Flashable.zip
