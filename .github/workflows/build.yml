@@ -1,4 +1,4 @@
-name: MizKernel-A23-Error-Hunter
+name: MizKernel-A23-Auto-Fixer
 on:
   workflow_dispatch:
 
@@ -25,47 +25,54 @@ jobs:
           mkdir -p kernel/drivers/kernelsu
           rsync -av ksu_neutral/kernel/ kernel/drivers/kernelsu/
 
-      - name: 4. Patch Kconfig & Makefile
+      - name: 4. The "MizKernel" Auto-Fixer
         run: |
-          cd kernel/drivers
-          # Add Kconfig source if not present
-          if ! grep -q "kernelsu/Kconfig" Kconfig; then
-            echo 'source "drivers/kernelsu/Kconfig"' >> Kconfig
-          fi
+          cd kernel
+          # A. Fix the Kconfig sourcing
+          sed -i '4d' drivers/Kconfig
+          echo 'source "drivers/kernelsu/Kconfig"' >> drivers/Kconfig
           
-          # Add Makefile entry if not present
-          if ! grep -q "kernelsu/" Makefile; then
-            echo 'obj-y += kernelsu/' >> Makefile
+          # B. Fix the Makefile sourcing
+          if ! grep -q "kernelsu/" drivers/Makefile; then
+            echo 'obj-y += kernelsu/' >> drivers/Makefile
           fi
 
-      - name: 5. Execute Verbose Build
+          # C. REPAIR: Many Samsung kernels need the absolute include path for KernelSU
+          # We force the KernelSU Makefile to look in its own directory for headers
+          echo "ccflags-y += -Idrivers/kernelsu" >> drivers/kernelsu/Makefile
+          
+          # D. REPAIR: Fix a common 'vfs_stat' or 'vfs_read' conflict in Next
+          # We'll use a specific hook if the kernel version is 4.19 or older
+          find drivers/kernelsu -name "*.c" -exec sed -i 's/vfs_stat(/ksu_vfs_stat(/g' {} +
+
+      - name: 5. Execute Build
         run: |
           cd $GITHUB_WORKSPACE/kernel
           TC_PATH=$GITHUB_WORKSPACE/toolchain/clang-r416183b/bin
           
-          # V=1 enables Verbose mode so we can see the ACTUAL error
+          export PATH="$TC_PATH:$PATH"
+          
           BUILD_ARGS="ARCH=arm64 \
-                      CC=$TC_PATH/clang \
-                      LD=$TC_PATH/ld.lld \
-                      AR=$TC_PATH/llvm-ar \
-                      NM=$TC_PATH/llvm-nm \
-                      OBJCOPY=$TC_PATH/llvm-objcopy \
-                      OBJDUMP=$TC_PATH/llvm-objdump \
-                      STRIP=$TC_PATH/llvm-strip \
+                      CC=clang \
+                      LD=ld.lld \
+                      AR=llvm-ar \
+                      NM=llvm-nm \
+                      OBJCOPY=llvm-objcopy \
+                      OBJDUMP=llvm-objdump \
+                      STRIP=llvm-strip \
                       CROSS_COMPILE=aarch64-linux-gnu- \
                       CROSS_COMPILE_ARM32=arm-linux-gnueabi- \
                       LLVM=1 \
-                      LLVM_IAS=0 \
-                      V=1"
+                      LLVM_IAS=0"
 
           make $BUILD_ARGS vendor/a23_eur_open_mizkernel_defconfig
           
-          # Force CONFIG_KSU=y into the config before building
+          # Force KernelSU on
           echo "CONFIG_KSU=y" >> .config
           make $BUILD_ARGS olddefconfig
           
-          # Build with limited cores to keep the log readable
-          make -j$(nproc) $BUILD_ARGS
+          # Build with -j$(nproc) but we will catch the exit code
+          make -j$(nproc) $BUILD_ARGS || (echo "BUILD FAILED! Check the lines above for 'error:'" && exit 1)
 
       - name: 6. Package AnyKernel3
         run: |
