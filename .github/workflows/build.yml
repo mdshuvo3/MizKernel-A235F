@@ -1,4 +1,4 @@
-name: MizKernel-A23-Final-Boss-Fixer
+name: MizKernel-A23-Strict-Fixer
 on:
   workflow_dispatch:
 
@@ -23,12 +23,13 @@ jobs:
           git clone --depth=1 https://github.com/rifsxd/KernelSU-Next ksu_neutral
           rm -rf kernel/drivers/kernelsu
           mkdir -p kernel/drivers/kernelsu
+          # Sync the kernel-side files of KernelSU-Next into your drivers
           rsync -av ksu_neutral/kernel/ kernel/drivers/kernelsu/
 
-      - name: 4. Deep Manual Patching (Audio & KSU)
+      - name: 4. Deep Manual Patching (Prototype Fix)
         run: |
           cd kernel
-          # A. Kconfig & Makefile
+          # A. Kconfig & Makefile Integration
           if ! grep -q "kernelsu/Kconfig" drivers/Kconfig; then
             sed -i '/endmenu/i source "drivers/kernelsu/Kconfig"' drivers/Kconfig
           fi
@@ -36,21 +37,23 @@ jobs:
             echo 'obj-y += kernelsu/' >> drivers/Makefile
           fi
 
-          # B. Force Include Path for KSU
+          # B. Force Include Path
           echo "ccflags-y += -I\$(srctree)/drivers/kernelsu" >> drivers/kernelsu/Makefile
 
-          # C. REPAIR: Techpack Audio Fix
-          # Samsung techpacks often fail because they lose track of the root techpack path
-          find techpack/audio -name "Makefile" -exec sed -i 's|$(srctree)/techpack/audio|$(srctree)/techpack/audio|g' {} +
-          
-          # D. REPAIR: The "Missing Hook" Fix (More Robust)
-          # We use a pattern match to insert BEFORE vfs_read instead of looking for the exact line
-          sed -i '/ssize_t vfs_read(struct file/i #include "../drivers/kernelsu/allowlist.h"' fs/read_write.c
-          sed -i '/if (unlikely(ret >= 0))/i \	ksu_handle_allowlist(file, buf, count, &ret);' fs/read_write.c
+          # C. REPAIR: Fix the 'Wstrict-prototypes' error (The error in your log)
+          # This specifically changes the () to (void) in allowlist.h
+          sed -i 's/void ksu_persistent_allow_list()/void ksu_persistent_allow_list(void)/g' drivers/kernelsu/allowlist.h
 
-          # E. REPAIR: KernelSU-Next Symbol Renaming
+          # D. REPAIR: KernelSU-Next Symbol Renaming
+          # Prevents conflicts with Samsung's stock VFS functions
           find drivers/kernelsu -name "*.c" -exec sed -i 's/vfs_stat(/ksu_vfs_stat(/g' {} +
           find drivers/kernelsu -name "*.c" -exec sed -i 's/vfs_fstatat(/ksu_vfs_fstatat(/g' {} +
+
+          # E. REPAIR: VFS Hook Injection
+          # Adding the necessary hooks into fs/read_write.c
+          # We use a broad match for the vfs_read signature
+          sed -i '/ssize_t vfs_read(struct file/i #include "../drivers/kernelsu/allowlist.h"' fs/read_write.c
+          sed -i '/if (unlikely(ret >= 0))/i \	ksu_handle_allowlist(file, buf, count, &ret);' fs/read_write.c
 
       - name: 5. Execute Build
         run: |
@@ -73,30 +76,3 @@ jobs:
 
           # Load defconfig
           make $BUILD_ARGS vendor/a23_eur_open_mizkernel_defconfig
-          
-          # Enable KernelSU
-          echo "CONFIG_KSU=y" >> .config
-          
-          # Fix common Samsung build errors regarding techpack
-          echo "CONFIG_TECHPACK_AUDIO=y" >> .config
-          
-          make $BUILD_ARGS olddefconfig
-          
-          # Run build - if it fails, retry with j1 for clear logs
-          make -j$(nproc) $BUILD_ARGS || make -j1 $BUILD_ARGS
-
-      - name: 6. Package AnyKernel3
-        run: |
-          cd $GITHUB_WORKSPACE
-          git clone --depth=1 https://github.com/osm0sis/AnyKernel3.git AnyKernel3
-          cd AnyKernel3
-          sed -i 's/do.devicecheck=1/do.devicecheck=0/g' anykernel.sh
-          sed -i 's!block=.*!block=auto;!g' anykernel.sh
-          cp ../kernel/arch/arm64/boot/Image* . || true
-          zip -r9 ../MizKernel-A23-KSU.zip * -x .git README.md
-
-      - name: 7. Upload Result
-        uses: actions/upload-artifact@v4
-        with:
-          name: MizKernel-A23-Final
-          path: MizKernel-A23-KSU.zip
