@@ -3,42 +3,28 @@ on:
   workflow_dispatch:
 
 jobs:
-  Build-Kernel:
-    strategy:
-      fail-fast: false
+  build:
     runs-on: ubuntu-latest
-    permissions:
-      contents: write
-
     steps:
-      - name: Checkout Kernel Source
+      - name: Checkout
         uses: actions/checkout@v4
         with:
-          repository: ${{ github.repository_owner }}/MizKernel-A235F
-          ref: main
-          path: kernel-source
-
-      - name: Fix KernelSU Shortcut
-        run: |
-          cd kernel-source/drivers
-          # Remove the broken symbolic link file
-          rm kernelsu
-          # Download the actual KernelSU-Next source code into a real folder
-          git clone https://github.com/rifsxd/KernelSU-Next kernelsu
-          cd ..
+          # This pulls YOUR repo and automatically handles submodules
+          repository: ${{ github.repository }}
+          submodules: recursive
+          fetch-depth: 0
 
       - name: Build Kernel
-        uses: dabao1955/kernel_build_action@main
+        uses: tiann/KernelSU-Action@main
         with:
-          kernel-url: local
-          kernel-dir: kernel-source
+          # This action is smarter and builds what is already checked out
+          kernel-url: https://github.com/${{ github.repository }}
+          branch: main
           config: vendor/a23_eur_open_mizkernel_defconfig
           arch: arm64
-          aosp-gcc: true
+          android-version: 12
+          # We tell it to use the r416183b clang version from your logs
           aosp-clang: true
           aosp-clang-version: r416183b
-          android-version: 12
-          extra-make-args: '["LLVM=1", "LLVM_IAS=1"]'
-          ksu: false
-          disable-lto: true
-          anykernel3: true
+          # Disable its auto-patching because MizKernel has KSU built-in
+          install-kernelsu: false
