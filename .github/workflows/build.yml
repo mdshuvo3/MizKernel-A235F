@@ -16,15 +16,17 @@ jobs:
         with:
           kernel-url: https://github.com/${{ github.repository_owner }}/MizKernel-A235F
           kernel-branch: main
+          
+          # IMPORTANT: This tells GitHub to download the missing KernelSU code
+          submodule: true
+          
           config: vendor/a23_eur_open_mizkernel_defconfig
           arch: arm64
-          
-          # Fixed: Added aosp-gcc because it's required for this Clang version
           aosp-gcc: true
           aosp-clang: true
           aosp-clang-version: r416183b
-          
           android-version: 12
+          extra-cmd: LLVM=1 LLVM_IAS=1
           ksu: false
           disable-lto: true
           anykernel3: true
