@@ -17,22 +17,22 @@ jobs:
           # 1. Checkout Kernel
           git clone --depth=1 https://github.com/${{ github.repository }} kernel
           
-          # 2. Setup Toolchain (Standard relative path)
+          # 2. Setup Toolchain in root so ../toolchain works from inside 'kernel'
           mkdir -p toolchain/clang-r416183b
           git clone --depth=1 https://github.com/kdrag0n/proton-clang.git toolchain/clang-r416183b
           
-          # 3. Setup KernelSU (Standard relative path)
+          # 3. Setup KernelSU (Relative path match)
           rm -rf kernel/drivers/kernelsu
           git clone --depth=1 https://github.com/rifsxd/KernelSU-Next kernel/drivers/kernelsu
 
-      - name: 3. The "In-Tree" Build (No O=out)
+      - name: 3. The "In-Tree" Build
         run: |
           cd kernel
           
-          # Set toolchain path
+          # Absolute path for the compiler binaries
           TC_PATH=$GITHUB_WORKSPACE/toolchain/clang-r416183b/bin
           
-          # We build directly in the source tree to ensure all Kconfig/Makefile paths match
+          # No O=out used here to ensure Kconfig and Makefile paths align perfectly
           BUILD_ARGS="ARCH=arm64 \
                       CC=$TC_PATH/clang \
                       LD=$TC_PATH/ld.lld \
@@ -59,12 +59,12 @@ jobs:
           sed -i 's/do.devicecheck=1/do.devicecheck=0/g' anykernel.sh
           sed -i 's!block=.*!block=auto;!g' anykernel.sh
           
-          # Find the Image (now in arch/arm64/boot/ since no 'out' folder exists)
+          # Kernel image is now in arch/arm64/boot/ inside the kernel folder
           cp ../kernel/arch/arm64/boot/Image* . || true
           zip -r9 ../MizKernel-A23.zip * -x .git README.md
 
-      - name: 5. Upload
-        uses: upload-artifact@v4
+      - name: 5. Upload Result
+        uses: actions/upload-artifact@v4
         with:
           name: MizKernel-A23
           path: MizKernel-A23.zip
