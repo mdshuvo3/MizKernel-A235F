@@ -1,4 +1,4 @@
-name: MizKernel-A23-InPlace
+name: MizKernel-A23-Kconfig-Bypass
 on:
   workflow_dispatch:
 
@@ -14,39 +14,31 @@ jobs:
 
       - name: 2. Checkout & Toolchain
         run: |
-          # 1. Checkout Kernel
           git clone --depth=1 https://github.com/${{ github.repository }} kernel
-          
-          # 2. Setup Toolchain in root so ../toolchain works
           mkdir -p toolchain/clang-r416183b
           git clone --depth=1 https://github.com/kdrag0n/proton-clang.git toolchain/clang-r416183b
 
-      - name: 3. The In-Place Overwrite (Final Fix)
+      - name: 3. The Bypass Patch
         run: |
-          cd $GITHUB_WORKSPACE
-          # 1. Clone KernelSU to a neutral temp folder
-          git clone --depth=1 https://github.com/rifsxd/KernelSU-Next ksu_temp
+          cd $GITHUB_WORKSPACE/kernel
           
-          # 2. FORCE CLEAN the destination (bypass any file-exists or symlink issues)
-          rm -rf kernel/drivers/kernelsu
-          mkdir -p kernel/drivers/kernelsu
+          # 1. Force KernelSU into the drivers folder
+          rm -rf drivers/kernelsu
+          git clone --depth=1 https://github.com/rifsxd/KernelSU-Next drivers/kernelsu
           
-          # 3. RSYNC the files into place (more reliable than cp for deep directory trees)
-          rsync -av ksu_temp/ kernel/drivers/kernelsu/
+          # 2. DELETE the problematic line 4 that keeps failing
+          sed -i '4d' drivers/Kconfig
           
-          # 4. RESET drivers/Kconfig (Undo all our previous 'sed' experiments to match original source)
-          # Your log shows it wants: "drivers/kernelsu/Kconfig"
-          cd kernel/drivers
-          echo 'source "drivers/kernelsu/Kconfig"' > Kconfig.tmp
-          tail -n +2 Kconfig >> Kconfig.tmp # Keep everything after line 1
-          # Note: If line 4 was the original, we ensure the file matches that expectation.
-          # Let's just restore the file to its original state if you committed our changes.
-          git checkout Kconfig || true 
+          # 3. APPEND the instruction to the VERY END of the file instead
+          # This avoids any "can't open" errors at the top of the file
+          echo 'source "drivers/kernelsu/Kconfig"' >> drivers/Kconfig
+          
+          # 4. Debug Check (So we can see if the file is actually there)
+          ls -l drivers/kernelsu/Kconfig
 
       - name: 4. The Build
         run: |
           cd $GITHUB_WORKSPACE/kernel
-          
           TC_PATH=$GITHUB_WORKSPACE/toolchain/clang-r416183b/bin
           
           BUILD_ARGS="ARCH=arm64 \
@@ -62,10 +54,7 @@ jobs:
                       LLVM=1 \
                       LLVM_IAS=0"
 
-          # Step A: Defconfig
           make $BUILD_ARGS vendor/a23_eur_open_mizkernel_defconfig
-          
-          # Step B: Compile
           make -j$(nproc) $BUILD_ARGS
 
       - name: 5. Package
