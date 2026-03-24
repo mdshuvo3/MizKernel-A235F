@@ -12,58 +12,56 @@ jobs:
           sudo apt-get install -y bc bison build-essential ccache curl flex g++-multilib gcc-multilib git gnupg gperf libelf-dev liblz4-tool libncurses-dev libsdl1.2-dev libssl-dev libxml2 libxml2-utils lzop rsync squashfs-tools xsltproc zip zlib1g-dev python3 binutils-aarch64-linux-gnu device-tree-compiler
           sudo ln -sf /usr/bin/python3 /usr/bin/python
 
-      - name: 2. Setup Precise Folder Structure
-        run: |
-          # We force everything into the root workspace to satisfy the ../ hardcoding
-          cd $GITHUB_WORKSPACE
-          mkdir -p toolchain
-          git clone --depth=1 https://github.com/kdrag0n/proton-clang.git toolchain/clang-r416183b
-
-      - name: 3. Checkout Kernel Source
+      - name: 2. Checkout Kernel Source
         uses: actions/checkout@v4
         with:
-          path: kernel # This puts the code in $GITHUB_WORKSPACE/kernel
+          path: kernel
 
-      - name: 4. Setup KernelSU (Provide the missing directory)
+      - name: 3. Setup Toolchain (Absolute Path)
+        run: |
+          mkdir -p $GITHUB_WORKSPACE/tc
+          git clone --depth=1 https://github.com/kdrag0n/proton-clang.git $GITHUB_WORKSPACE/tc/clang-r416183b
+
+      - name: 4. The "Anchor" Fix (Crucial)
+        run: |
+          # The Makefile looks for ../toolchain/ relative to the 'out' directory.
+          # We create a symlink INSIDE the kernel folder so that ../toolchain ALWAYS works.
+          cd $GITHUB_WORKSPACE/kernel
+          ln -sf $GITHUB_WORKSPACE/tc toolchain
+          
+          # Now: kernel/out -> ../toolchain -> kernel/toolchain -> $GITHUB_WORKSPACE/tc
+          # This bypasses all GitHub runner folder nesting issues.
+
+      - name: 5. Setup KernelSU
         run: |
           cd $GITHUB_WORKSPACE/kernel/drivers
-          # Remove any existing link and clone the actual source
           rm -rf kernelsu
           git clone --depth=1 https://github.com/rifsxd/KernelSU-Next kernelsu
 
-      - name: 5. Execute Build
+      - name: 6. Execute Build
         run: |
-          # Move into the kernel directory
           cd $GITHUB_WORKSPACE/kernel
-          
-          # Create the output directory
           mkdir -p out
           
-          # Force the compiler into the environment path just in case
-          export PATH="$GITHUB_WORKSPACE/toolchain/clang-r416183b/bin:$PATH"
+          # Force the absolute toolchain path into the shell PATH as a secondary fallback
+          export PATH="$GITHUB_WORKSPACE/tc/clang-r416183b/bin:$PATH"
           
-          # Run the build
-          # LLVM=1 and LLVM_IAS=0 are standard for this 4.19 source
           make O=out ARCH=arm64 vendor/a23_eur_open_mizkernel_defconfig
           make -j$(nproc) O=out ARCH=arm64 LLVM=1 LLVM_IAS=0
 
-      - name: 6. Package AnyKernel3
+      - name: 7. Package AnyKernel3
         run: |
           cd $GITHUB_WORKSPACE
           git clone --depth=1 https://github.com/osm0sis/AnyKernel3.git AnyKernel3
           cd AnyKernel3
-          
-          # Patch script for a23
           sed -i 's/do.devicecheck=1/do.devicecheck=0/g' anykernel.sh
           sed -i 's!block=.*!block=auto;!g' anykernel.sh
           
-          # Copy the Image
           cp $GITHUB_WORKSPACE/kernel/out/arch/arm64/boot/Image* . || true
-          
-          zip -r9 ../MizKernel-A23-Flashable.zip * -x .git README.md
+          zip -r9 ../MizKernel-A23.zip * -x .git README.md
 
-      - name: 7. Upload Result
+      - name: 8. Upload Result
         uses: actions/upload-artifact@v4
         with:
           name: MizKernel-A23
-          path: MizKernel-A23-Flashable.zip
+          path: MizKernel-A23.zip
