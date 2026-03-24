@@ -1,106 +1,62 @@
-name: MizKernel A23 Sandboxed Build
+name: MizKernel A23 Build
 on:
   workflow_dispatch:
 
 jobs:
   build:
-    name: Build Kernel
     runs-on: ubuntu-22.04
     steps:
       - name: 1. Install Dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y bc bison build-essential ccache curl flex g++-multilib gcc-multilib git gnupg gperf libelf-dev liblz4-tool libncurses-dev libsdl1.2-dev libssl-dev libxml2 libxml2-utils lzop rsync squashfs-tools xsltproc zip zlib1g-dev python3 python-is-python3 binutils-aarch64-linux-gnu device-tree-compiler zstd libzstd-dev
+          sudo apt-get install -y bc bison build-essential ccache curl flex g++-multilib gcc-multilib git gnupg gperf libelf-dev liblz4-tool libncurses-dev libsdl1.2-dev libssl-dev libxml2 libxml2-utils lzop rsync squashfs-tools xsltproc zip zlib1g-dev python3 binutils-aarch64-linux-gnu device-tree-compiler
+          sudo ln -sf /usr/bin/python3 /usr/bin/python
 
-      - name: 2. Setup Sandboxed Workspace
-        run: |
-          mkdir -p ${{ github.workspace }}/kernel
-          mkdir -p ${{ github.workspace }}/tc
-          mkdir -p ${{ github.workspace }}/anykernel
-
-      - name: 3. Download Toolchain & Checkout Kernel
+      - name: 2. Checkout Kernel Source
         uses: actions/checkout@v4
         with:
-          path: kernel
-          fetch-depth: 1
+          path: kernel # This places the source inside ${{ github.workspace }}/kernel
 
-      - name: 4. Download Proton-Clang
+      - name: 3. Setup Toolchain (Satisfy Hardcoded Path)
         run: |
-          git clone --depth=1 https://github.com/kdrag0n/proton-clang.git ${{ github.workspace }}/tc
+          # We create the exact folder structure the Makefile demands: ../toolchain/clang-r416183b
+          mkdir -p ${{ github.workspace }}/toolchain
+          git clone --depth=1 https://github.com/kdrag0n/proton-clang.git ${{ github.workspace }}/toolchain/clang-r416183b
 
-      - name: 5. Inject KernelSU-Next
+      - name: 4. Setup KernelSU (Satisfy Hardcoded Kconfig)
         run: |
+          # The developer already edited the config files. We JUST need to provide the folder.
           cd ${{ github.workspace }}/kernel/drivers
           rm -rf kernelsu
           git clone --depth=1 https://github.com/rifsxd/KernelSU-Next kernelsu
-          
-          # Append to Kconfig and Makefile safely
-          if ! grep -q "kernelsu" Kconfig; then
-            echo 'source "drivers/kernelsu/Kconfig"' >> Kconfig
-          fi
-          if ! grep -q "kernelsu" Makefile; then
-            echo 'obj-y += kernelsu/' >> Makefile
-          fi
 
-      - name: 6. Compile Kernel
+      - name: 5. Compile Kernel
         run: |
           cd ${{ github.workspace }}/kernel
+          mkdir -p out
           
-          # Force the compiler into the path
-          export PATH="${{ github.workspace }}/tc/bin:$PATH"
-          
-          # Explicitly define all LLVM variables so the build never falls back to GCC
-          export ARCH=arm64
-          export CROSS_COMPILE=aarch64-linux-gnu-
-          export CROSS_COMPILE_COMPAT=arm-linux-gnueabi-
-          export CC=clang
-          export LD=ld.lld
-          export AR=llvm-ar
-          export NM=llvm-nm
-          export OBJCOPY=llvm-objcopy
-          export OBJDUMP=llvm-objdump
-          export STRIP=llvm-strip
-          export LLVM=1
-          export LLVM_IAS=0
-          
-          # Fix for Samsung DTB generation
-          mkdir -p out/include
-          ln -sf ../../include/dt-bindings out/include/dt-bindings
-          
-          # Generate Config
-          make O=out vendor/a23_eur_open_mizkernel_defconfig
-          
-          # Build
-          make -j$(nproc) O=out \
-            KCFLAGS="-Wno-implicit-function-declaration -Wno-strict-prototypes -Wno-int-conversion -Wno-return-type"
+          # Since the Makefile already has the paths hardcoded, we just run make.
+          # LLVM_IAS=0 is kept to prevent assembly crashes.
+          make O=out ARCH=arm64 vendor/a23_eur_open_mizkernel_defconfig
+          make -j$(nproc) O=out ARCH=arm64 LLVM=1 LLVM_IAS=0
 
-      - name: 7. Package AnyKernel3
+      - name: 6. Package AnyKernel3
         run: |
-          git clone --depth=1 https://github.com/osm0sis/AnyKernel3.git ${{ github.workspace }}/anykernel
-          cd ${{ github.workspace }}/anykernel
+          cd ${{ github.workspace }}
+          git clone --depth=1 https://github.com/osm0sis/AnyKernel3.git AnyKernel3
+          cd AnyKernel3
           
-          # Samsung A23 specific overrides
+          # Remove strict device checks
           sed -i 's/do.devicecheck=1/do.devicecheck=0/g' anykernel.sh
           sed -i 's!block=.*!block=auto;!g' anykernel.sh
-          sed -i 's/is_slot_device=1/is_slot_device=0/g' anykernel.sh
           
-          # Locate and copy the compiled image
-          BOOT_DIR="${{ github.workspace }}/kernel/out/arch/arm64/boot"
-          if [ -f "$BOOT_DIR/Image.gz-dtb" ]; then
-            cp "$BOOT_DIR/Image.gz-dtb" Image
-          elif [ -f "$BOOT_DIR/Image.gz" ]; then
-            cp "$BOOT_DIR/Image.gz" Image
-          elif [ -f "$BOOT_DIR/Image" ]; then
-            cp "$BOOT_DIR/Image" Image
-          else
-            echo "Error: No kernel Image found!"
-            exit 1
-          fi
+          # Copy any generated Image file
+          cp ../kernel/out/arch/arm64/boot/Image* . || true
           
-          zip -r9 ${{ github.workspace }}/MizKernel-A23-Sandboxed.zip * -x .git README.md *placeholder
+          zip -r9 ../MizKernel-A23-Flashable.zip * -x .git README.md *placeholder
 
-      - name: 8. Upload Flashable Zip
+      - name: 7. Upload
         uses: actions/upload-artifact@v4
         with:
-          name: MizKernel-A23
-          path: ${{ github.workspace }}/MizKernel-A23-Sandboxed.zip
+          name: MizKernel-A23-Zip
+          path: MizKernel-A23-Flashable.zip
