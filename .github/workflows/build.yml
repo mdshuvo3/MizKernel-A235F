@@ -1,4 +1,4 @@
-name: MizKernel-A23-Root-Anchor
+name: MizKernel-A23-InPlace
 on:
   workflow_dispatch:
 
@@ -12,32 +12,40 @@ jobs:
           sudo apt-get install -y bc bison build-essential ccache curl flex g++-multilib gcc-multilib git gnupg gperf libelf-dev liblz4-tool libncurses-dev libsdl1.2-dev libssl-dev libxml2 libxml2-utils lzop rsync squashfs-tools xsltproc zip zlib1g-dev python3 binutils-aarch64-linux-gnu device-tree-compiler
           sudo ln -sf /usr/bin/python3 /usr/bin/python
 
-      - name: 2. Checkout & Toolchain Setup
+      - name: 2. Checkout & Toolchain
         run: |
+          # 1. Checkout Kernel
           git clone --depth=1 https://github.com/${{ github.repository }} kernel
           
-          # Setup Toolchain in root so ../toolchain works
+          # 2. Setup Toolchain in root so ../toolchain works
           mkdir -p toolchain/clang-r416183b
           git clone --depth=1 https://github.com/kdrag0n/proton-clang.git toolchain/clang-r416183b
 
-      - name: 3. The Root-Anchor Fix
+      - name: 3. The In-Place Overwrite (Final Fix)
         run: |
-          cd kernel
-          # 1. Clone KernelSU into the ROOT of the kernel (not drivers)
-          rm -rf kernelsu
-          git clone --depth=1 https://github.com/rifsxd/KernelSU-Next kernelsu
+          cd $GITHUB_WORKSPACE
+          # 1. Clone KernelSU to a neutral temp folder
+          git clone --depth=1 https://github.com/rifsxd/KernelSU-Next ksu_temp
           
-          # 2. Update drivers/Kconfig to look at the ROOT folder
-          # This is a standard 'source' path that always works from any subdirectory
-          sed -i 's|source "drivers/kernelsu/Kconfig"|source "kernelsu/Kconfig"|g' drivers/Kconfig
+          # 2. FORCE CLEAN the destination (bypass any file-exists or symlink issues)
+          rm -rf kernel/drivers/kernelsu
+          mkdir -p kernel/drivers/kernelsu
           
-          # 3. Update drivers/Makefile to find the ROOT folder
-          # We tell the makefile to look one level up from drivers/
-          sed -i 's|obj-y += kernelsu/|obj-y += ../kernelsu/|g' drivers/Makefile
+          # 3. RSYNC the files into place (more reliable than cp for deep directory trees)
+          rsync -av ksu_temp/ kernel/drivers/kernelsu/
+          
+          # 4. RESET drivers/Kconfig (Undo all our previous 'sed' experiments to match original source)
+          # Your log shows it wants: "drivers/kernelsu/Kconfig"
+          cd kernel/drivers
+          echo 'source "drivers/kernelsu/Kconfig"' > Kconfig.tmp
+          tail -n +2 Kconfig >> Kconfig.tmp # Keep everything after line 1
+          # Note: If line 4 was the original, we ensure the file matches that expectation.
+          # Let's just restore the file to its original state if you committed our changes.
+          git checkout Kconfig || true 
 
-      - name: 4. The In-Tree Build
+      - name: 4. The Build
         run: |
-          cd kernel
+          cd $GITHUB_WORKSPACE/kernel
           
           TC_PATH=$GITHUB_WORKSPACE/toolchain/clang-r416183b/bin
           
@@ -60,8 +68,9 @@ jobs:
           # Step B: Compile
           make -j$(nproc) $BUILD_ARGS
 
-      - name: 5. Package AnyKernel3
+      - name: 5. Package
         run: |
+          cd $GITHUB_WORKSPACE
           git clone --depth=1 https://github.com/osm0sis/AnyKernel3.git AnyKernel3
           cd AnyKernel3
           sed -i 's/do.devicecheck=1/do.devicecheck=0/g' anykernel.sh
@@ -69,7 +78,7 @@ jobs:
           cp ../kernel/arch/arm64/boot/Image* . || true
           zip -r9 ../MizKernel-A23.zip * -x .git README.md
 
-      - name: 6. Upload Result
+      - name: 6. Upload
         uses: actions/upload-artifact@v4
         with:
           name: MizKernel-A23
