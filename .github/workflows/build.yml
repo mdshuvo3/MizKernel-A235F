@@ -1,4 +1,4 @@
-name: MizKernel-A23-Deep-Fixer
+name: MizKernel-A23-Final-Boss-Fixer
 on:
   workflow_dispatch:
 
@@ -9,7 +9,7 @@ jobs:
       - name: 1. Install Dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y bc bison build-essential ccache curl flex g++-multilib gcc-multilib git gnupg gperf libelf-dev liblz4-tool libncurses-dev libsdl1.2-dev libssl-dev libxml2 libxml2-utils lzop rsync squashfs-tools xsltproc zip zlib1g-dev python3 binutils-aarch64-linux-gnu device-tree-compiler
+          sudo apt-get install -y bc bison build-essential ccache curl flex g++-multilib gcc-multilib git gnupg gperf libelf-dev liblz4-tool libncurses-dev libsdl1.2-dev libssl-dev libxml2 libxml2-utils rsync squashfs-tools xsltproc zip zlib1g-dev python3 binutils-aarch64-linux-gnu device-tree-compiler
           sudo ln -sf /usr/bin/python3 /usr/bin/python
 
       - name: 2. Checkout & Toolchain
@@ -25,7 +25,7 @@ jobs:
           mkdir -p kernel/drivers/kernelsu
           rsync -av ksu_neutral/kernel/ kernel/drivers/kernelsu/
 
-      - name: 4. Deep Manual Patching
+      - name: 4. Deep Manual Patching (Audio & KSU)
         run: |
           cd kernel
           # A. Kconfig & Makefile
@@ -36,16 +36,19 @@ jobs:
             echo 'obj-y += kernelsu/' >> drivers/Makefile
           fi
 
-          # B. Force Include Path
+          # B. Force Include Path for KSU
           echo "ccflags-y += -I\$(srctree)/drivers/kernelsu" >> drivers/kernelsu/Makefile
 
-          # C. REPAIR: The "Missing Hook" Fix
-          # We need to tell the kernel that KernelSU exists by patching the Filesystem
-          # This adds the necessary hooks into fs/read_write.c
-          sed -i '/extern ssize_t vfs_read/i #include "../drivers/kernelsu/allowlist.h"' fs/read_write.c
+          # C. REPAIR: Techpack Audio Fix
+          # Samsung techpacks often fail because they lose track of the root techpack path
+          find techpack/audio -name "Makefile" -exec sed -i 's|$(srctree)/techpack/audio|$(srctree)/techpack/audio|g' {} +
+          
+          # D. REPAIR: The "Missing Hook" Fix (More Robust)
+          # We use a pattern match to insert BEFORE vfs_read instead of looking for the exact line
+          sed -i '/ssize_t vfs_read(struct file/i #include "../drivers/kernelsu/allowlist.h"' fs/read_write.c
           sed -i '/if (unlikely(ret >= 0))/i \	ksu_handle_allowlist(file, buf, count, &ret);' fs/read_write.c
 
-          # D. REPAIR: KernelSU-Next Symbol Renaming
+          # E. REPAIR: KernelSU-Next Symbol Renaming
           find drivers/kernelsu -name "*.c" -exec sed -i 's/vfs_stat(/ksu_vfs_stat(/g' {} +
           find drivers/kernelsu -name "*.c" -exec sed -i 's/vfs_fstatat(/ksu_vfs_fstatat(/g' {} +
 
@@ -68,11 +71,18 @@ jobs:
                       LLVM=1 \
                       LLVM_IAS=0"
 
+          # Load defconfig
           make $BUILD_ARGS vendor/a23_eur_open_mizkernel_defconfig
+          
+          # Enable KernelSU
           echo "CONFIG_KSU=y" >> .config
+          
+          # Fix common Samsung build errors regarding techpack
+          echo "CONFIG_TECHPACK_AUDIO=y" >> .config
+          
           make $BUILD_ARGS olddefconfig
           
-          # We use -j$(nproc) but if it fails, we rerun with -j1 to catch the EXACT error
+          # Run build - if it fails, retry with j1 for clear logs
           make -j$(nproc) $BUILD_ARGS || make -j1 $BUILD_ARGS
 
       - name: 6. Package AnyKernel3
@@ -83,10 +93,10 @@ jobs:
           sed -i 's/do.devicecheck=1/do.devicecheck=0/g' anykernel.sh
           sed -i 's!block=.*!block=auto;!g' anykernel.sh
           cp ../kernel/arch/arm64/boot/Image* . || true
-          zip -r9 ../MizKernel-A23.zip * -x .git README.md
+          zip -r9 ../MizKernel-A23-KSU.zip * -x .git README.md
 
       - name: 7. Upload Result
         uses: actions/upload-artifact@v4
         with:
-          name: MizKernel-A23
-          path: MizKernel-A23.zip
+          name: MizKernel-A23-Final
+          path: MizKernel-A23-KSU.zip
