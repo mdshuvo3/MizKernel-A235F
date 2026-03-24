@@ -1,4 +1,4 @@
-name: MizKernel-A23-Final-Path-Fix
+name: MizKernel-A23-Error-Hunter
 on:
   workflow_dispatch:
 
@@ -20,44 +20,30 @@ jobs:
 
       - name: 3. Precision KernelSU Injection
         run: |
-          # 1. Clone to neutral ground
           git clone --depth=1 https://github.com/rifsxd/KernelSU-Next ksu_neutral
-          
-          # 2. Clear and recreate target
           rm -rf kernel/drivers/kernelsu
           mkdir -p kernel/drivers/kernelsu
-          
-          # 3. RSYNC ONLY THE KERNEL SUBFOLDER (Note the /kernel/ at the end)
-          # This puts Kconfig directly into drivers/kernelsu/
           rsync -av ksu_neutral/kernel/ kernel/drivers/kernelsu/
-          
-          # 4. Verify path
-          if [ -f "kernel/drivers/kernelsu/Kconfig" ]; then
-            echo "✅ SUCCESS: Kconfig is now in the correct spot!"
-          else
-            echo "❌ ERROR: Kconfig still not found at the target path."
-            exit 1
-          fi
 
       - name: 4. Patch Kconfig & Makefile
         run: |
           cd kernel/drivers
-          # Ensure the Kconfig is sourced
-          # We check if it's already there to avoid double-entry
+          # Add Kconfig source if not present
           if ! grep -q "kernelsu/Kconfig" Kconfig; then
             echo 'source "drivers/kernelsu/Kconfig"' >> Kconfig
           fi
           
-          # Ensure the Makefile compiles the new folder
+          # Add Makefile entry if not present
           if ! grep -q "kernelsu/" Makefile; then
             echo 'obj-y += kernelsu/' >> Makefile
           fi
 
-      - name: 5. Execute Build
+      - name: 5. Execute Verbose Build
         run: |
           cd $GITHUB_WORKSPACE/kernel
           TC_PATH=$GITHUB_WORKSPACE/toolchain/clang-r416183b/bin
           
+          # V=1 enables Verbose mode so we can see the ACTUAL error
           BUILD_ARGS="ARCH=arm64 \
                       CC=$TC_PATH/clang \
                       LD=$TC_PATH/ld.lld \
@@ -69,10 +55,16 @@ jobs:
                       CROSS_COMPILE=aarch64-linux-gnu- \
                       CROSS_COMPILE_ARM32=arm-linux-gnueabi- \
                       LLVM=1 \
-                      LLVM_IAS=0"
+                      LLVM_IAS=0 \
+                      V=1"
 
-          # Use the A23 specific defconfig
           make $BUILD_ARGS vendor/a23_eur_open_mizkernel_defconfig
+          
+          # Force CONFIG_KSU=y into the config before building
+          echo "CONFIG_KSU=y" >> .config
+          make $BUILD_ARGS olddefconfig
+          
+          # Build with limited cores to keep the log readable
           make -j$(nproc) $BUILD_ARGS
 
       - name: 6. Package AnyKernel3
