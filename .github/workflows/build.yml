@@ -14,22 +14,17 @@ jobs:
       - name: Build Kernel
         uses: dabao1955/kernel_build_action@main
         with:
-          # Automatically detects your fork's URL
           kernel-url: https://github.com/${{ github.repository_owner }}/MizKernel-A235F
           kernel-branch: main
-          
-          # Path to the specific config we found in Termux
           config: vendor/a23_eur_open_mizkernel_defconfig
           arch: arm64
           
-          # Toolchain setup to match the MizKernel environment
+          # Fixed: Added aosp-gcc because it's required for this Clang version
+          aosp-gcc: true
           aosp-clang: true
           aosp-clang-version: r416183b
+          
           android-version: 12
-          
-          # Set to false because KernelSU is already in the source code
           ksu: false
-          
-          # Optimizations to ensure it fits in the boot partition
           disable-lto: true
           anykernel3: true
