@@ -1,4 +1,4 @@
-name: MizKernel-A23-Strict-Fixer
+name: MizKernel-A23-KSU-Next
 on:
   workflow_dispatch:
 
@@ -6,30 +6,44 @@ jobs:
   build:
     runs-on: ubuntu-22.04
     steps:
-      - name: 1. Install Dependencies
+      - name: 1. Environment Setup
         run: |
           sudo apt-get update
           sudo apt-get install -y bc bison build-essential ccache curl flex g++-multilib gcc-multilib git gnupg gperf libelf-dev liblz4-tool libncurses-dev libsdl1.2-dev libssl-dev libxml2 libxml2-utils rsync squashfs-tools xsltproc zip zlib1g-dev python3 binutils-aarch64-linux-gnu device-tree-compiler
           sudo ln -sf /usr/bin/python3 /usr/bin/python
 
-      - name: 2. Checkout & Toolchain
+      - name: 2. Pull Source & Toolchain
         run: |
           git clone --depth=1 https://github.com/${{ github.repository }} kernel
           mkdir -p toolchain/clang-r416183b
           git clone --depth=1 https://github.com/kdrag0n/proton-clang.git toolchain/clang-r416183b
 
-      - name: 3. Precision KernelSU-Next Injection
+      - name: 3. Inject KernelSU-Next
         run: |
-          git clone --depth=1 https://github.com/rifsxd/KernelSU-Next ksu_neutral
+          git clone --depth=1 https://github.com/rifsxd/KernelSU-Next ksu_src
           rm -rf kernel/drivers/kernelsu
           mkdir -p kernel/drivers/kernelsu
-          # Sync the kernel-side files of KernelSU-Next into your drivers
-          rsync -av ksu_neutral/kernel/ kernel/drivers/kernelsu/
+          rsync -av ksu_src/kernel/ kernel/drivers/kernelsu/
 
-      - name: 4. Deep Manual Patching (Prototype Fix)
+      - name: 4. Surgical Code Fixes
         run: |
           cd kernel
-          # A. Kconfig & Makefile Integration
+          
+          # FIX 1: Strict Prototypes Error (Fixes the 'void ksu_persistent_allow_list()' error)
+          # Clang requires (void) instead of empty () for function definitions
+          sed -i 's/void ksu_persistent_allow_list()/void ksu_persistent_allow_list(void)/g' drivers/kernelsu/allowlist.h
+          
+          # FIX 2: VFS Hooks in read_write.c
+          # We place the include and the hook before the standard vfs_read call
+          sed -i '/ssize_t vfs_read(struct file/i #include "../drivers/kernelsu/allowlist.h"' fs/read_write.c
+          sed -i '/if (unlikely(ret >= 0))/i \	ksu_handle_allowlist(file, buf, count, &ret);' fs/read_write.c
+
+          # FIX 3: KernelSU Symbol Conflicts
+          # This prevents naming collisions with the stock kernel
+          find drivers/kernelsu -name "*.c" -exec sed -i 's/vfs_stat(/ksu_vfs_stat(/g' {} +
+          find drivers/kernelsu -name "*.c" -exec sed -i 's/vfs_fstatat(/ksu_vfs_fstatat(/g' {} +
+
+          # FIX 4: Build System Integration
           if ! grep -q "kernelsu/Kconfig" drivers/Kconfig; then
             sed -i '/endmenu/i source "drivers/kernelsu/Kconfig"' drivers/Kconfig
           fi
@@ -37,42 +51,42 @@ jobs:
             echo 'obj-y += kernelsu/' >> drivers/Makefile
           fi
 
-          # B. Force Include Path
-          echo "ccflags-y += -I\$(srctree)/drivers/kernelsu" >> drivers/kernelsu/Makefile
-
-          # C. REPAIR: Fix the 'Wstrict-prototypes' error (The error in your log)
-          # This specifically changes the () to (void) in allowlist.h
-          sed -i 's/void ksu_persistent_allow_list()/void ksu_persistent_allow_list(void)/g' drivers/kernelsu/allowlist.h
-
-          # D. REPAIR: KernelSU-Next Symbol Renaming
-          # Prevents conflicts with Samsung's stock VFS functions
-          find drivers/kernelsu -name "*.c" -exec sed -i 's/vfs_stat(/ksu_vfs_stat(/g' {} +
-          find drivers/kernelsu -name "*.c" -exec sed -i 's/vfs_fstatat(/ksu_vfs_fstatat(/g' {} +
-
-          # E. REPAIR: VFS Hook Injection
-          # Adding the necessary hooks into fs/read_write.c
-          # We use a broad match for the vfs_read signature
-          sed -i '/ssize_t vfs_read(struct file/i #include "../drivers/kernelsu/allowlist.h"' fs/read_write.c
-          sed -i '/if (unlikely(ret >= 0))/i \	ksu_handle_allowlist(file, buf, count, &ret);' fs/read_write.c
-
-      - name: 5. Execute Build
+      - name: 5. Start Compilation
         run: |
-          cd $GITHUB_WORKSPACE/kernel
-          TC_PATH=$GITHUB_WORKSPACE/toolchain/clang-r416183b/bin
-          export PATH="$TC_PATH:$PATH"
+          cd kernel
+          export PATH="$GITHUB_WORKSPACE/toolchain/clang-r416183b/bin:$PATH"
           
-          BUILD_ARGS="ARCH=arm64 \
-                      CC=clang \
-                      LD=ld.lld \
-                      AR=llvm-ar \
-                      NM=llvm-nm \
-                      OBJCOPY=llvm-objcopy \
-                      OBJDUMP=llvm-objdump \
-                      STRIP=llvm-strip \
-                      CROSS_COMPILE=aarch64-linux-gnu- \
-                      CROSS_COMPILE_ARM32=arm-linux-gnueabi- \
-                      LLVM=1 \
-                      LLVM_IAS=0"
+          ARGS="ARCH=arm64 \
+                CC=clang \
+                LD=ld.lld \
+                AR=llvm-ar \
+                NM=llvm-nm \
+                OBJCOPY=llvm-objcopy \
+                OBJDUMP=llvm-objdump \
+                STRIP=llvm-strip \
+                CROSS_COMPILE=aarch64-linux-gnu- \
+                CROSS_COMPILE_ARM32=arm-linux-gnueabi- \
+                LLVM=1 \
+                LLVM_IAS=0"
 
-          # Load defconfig
-          make $BUILD_ARGS vendor/a23_eur_open_mizkernel_defconfig
+          make $ARGS vendor/a23_eur_open_mizkernel_defconfig
+          echo "CONFIG_KSU=y" >> .config
+          make $ARGS olddefconfig
+          
+          # Attempt parallel build, fall back to single-core if it errors for detailed logs
+          make -j$(nproc) $ARGS || make -j1 $ARGS
+
+      - name: 6. Build AnyKernel3 Flashable Zip
+        run: |
+          git clone --depth=1 https://github.com/osm0sis/AnyKernel3.git AK3
+          cd AK3
+          sed -i 's/do.devicecheck=1/do.devicecheck=0/g' anykernel.sh
+          sed -i 's!block=.*!block=auto;!g' anykernel.sh
+          cp ../kernel/arch/arm64/boot/Image* . || true
+          zip -r9 ../MizKernel-A23-KSU-Next.zip *
+
+      - name: 7. Upload Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: MizKernel-Build
+          path: MizKernel-A23-KSU-Next.zip
