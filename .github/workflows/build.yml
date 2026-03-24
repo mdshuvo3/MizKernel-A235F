@@ -11,14 +11,22 @@ jobs:
       contents: write
 
     steps:
+      # Step 1: Manually download the kernel AND its submodules (KernelSU)
+      - name: Checkout Kernel Source
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ github.repository_owner }}/MizKernel-A235F
+          ref: main
+          submodules: recursive
+          path: kernel-source
+
+      # Step 2: Run the build action using the local folder we just checked out
       - name: Build Kernel
         uses: dabao1955/kernel_build_action@main
         with:
-          kernel-url: https://github.com/${{ github.repository_owner }}/MizKernel-A235F
-          kernel-branch: main
-          
-          # IMPORTANT: This tells GitHub to download the missing KernelSU code
-          submodule: true
+          # This tells the action to use the code we downloaded in Step 1
+          kernel-url: local
+          kernel-dir: kernel-source
           
           config: vendor/a23_eur_open_mizkernel_defconfig
           arch: arm64
@@ -26,7 +34,10 @@ jobs:
           aosp-clang: true
           aosp-clang-version: r416183b
           android-version: 12
-          extra-cmd: LLVM=1 LLVM_IAS=1
+          
+          # We pass the LLVM commands through extra-make-args
+          extra-make-args: '["LLVM=1", "LLVM_IAS=1"]'
+          
           ksu: false
           disable-lto: true
           anykernel3: true
