@@ -1,4 +1,4 @@
-name: MizKernel-A23-Final-InTree
+name: MizKernel-A23-Force-Merge
 on:
   workflow_dispatch:
 
@@ -14,25 +14,34 @@ jobs:
 
       - name: 2. Checkout & Toolchain Setup
         run: |
-          # 1. Checkout Kernel
           git clone --depth=1 https://github.com/${{ github.repository }} kernel
           
-          # 2. Setup Toolchain in root so ../toolchain works from inside 'kernel'
+          # Setup Toolchain exactly where the Makefile wants it (../toolchain)
           mkdir -p toolchain/clang-r416183b
           git clone --depth=1 https://github.com/kdrag0n/proton-clang.git toolchain/clang-r416183b
-          
-          # 3. Setup KernelSU (Relative path match)
-          rm -rf kernel/drivers/kernelsu
-          git clone --depth=1 https://github.com/rifsxd/KernelSU-Next kernel/drivers/kernelsu
 
-      - name: 3. The "In-Tree" Build
+      - name: 3. The Force-Merge Fix
+        run: |
+          # 1. Clone KernelSU to a temporary spot
+          git clone --depth=1 https://github.com/rifsxd/KernelSU-Next ksu_source
+          
+          # 2. FORCE create the directory and MOVE files (bypass git link issues)
+          rm -rf kernel/drivers/kernelsu
+          mkdir -p kernel/drivers/kernelsu
+          cp -r ksu_source/* kernel/drivers/kernelsu/
+          
+          # 3. Patch the Kconfig to use a RELATIVE path from the drivers root
+          # This bypasses the parser getting lost in subdirectories
+          cd kernel/drivers
+          sed -i 's|source "drivers/kernelsu/Kconfig"|source "kernelsu/Kconfig"|g' Kconfig
+
+      - name: 4. The In-Tree Build
         run: |
           cd kernel
           
-          # Absolute path for the compiler binaries
+          # Absolute path for compiler
           TC_PATH=$GITHUB_WORKSPACE/toolchain/clang-r416183b/bin
           
-          # No O=out used here to ensure Kconfig and Makefile paths align perfectly
           BUILD_ARGS="ARCH=arm64 \
                       CC=$TC_PATH/clang \
                       LD=$TC_PATH/ld.lld \
@@ -52,18 +61,16 @@ jobs:
           # Step B: Compile
           make -j$(nproc) $BUILD_ARGS
 
-      - name: 4. Package AnyKernel3
+      - name: 5. Package
         run: |
           git clone --depth=1 https://github.com/osm0sis/AnyKernel3.git AnyKernel3
           cd AnyKernel3
           sed -i 's/do.devicecheck=1/do.devicecheck=0/g' anykernel.sh
           sed -i 's!block=.*!block=auto;!g' anykernel.sh
-          
-          # Kernel image is now in arch/arm64/boot/ inside the kernel folder
           cp ../kernel/arch/arm64/boot/Image* . || true
           zip -r9 ../MizKernel-A23.zip * -x .git README.md
 
-      - name: 5. Upload Result
+      - name: 6. Upload Result
         uses: actions/upload-artifact@v4
         with:
           name: MizKernel-A23
