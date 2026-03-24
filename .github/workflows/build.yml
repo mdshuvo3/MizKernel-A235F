@@ -1,4 +1,4 @@
-name: MizKernel A23 Build
+name: MizKernel A23 Final Hardened
 on:
   workflow_dispatch:
 
@@ -12,51 +12,58 @@ jobs:
           sudo apt-get install -y bc bison build-essential ccache curl flex g++-multilib gcc-multilib git gnupg gperf libelf-dev liblz4-tool libncurses-dev libsdl1.2-dev libssl-dev libxml2 libxml2-utils lzop rsync squashfs-tools xsltproc zip zlib1g-dev python3 binutils-aarch64-linux-gnu device-tree-compiler
           sudo ln -sf /usr/bin/python3 /usr/bin/python
 
-      - name: 2. Checkout Kernel Source
+      - name: 2. Setup Precise Folder Structure
+        run: |
+          # We force everything into the root workspace to satisfy the ../ hardcoding
+          cd $GITHUB_WORKSPACE
+          mkdir -p toolchain
+          git clone --depth=1 https://github.com/kdrag0n/proton-clang.git toolchain/clang-r416183b
+
+      - name: 3. Checkout Kernel Source
         uses: actions/checkout@v4
         with:
-          path: kernel # This places the source inside ${{ github.workspace }}/kernel
+          path: kernel # This puts the code in $GITHUB_WORKSPACE/kernel
 
-      - name: 3. Setup Toolchain (Satisfy Hardcoded Path)
+      - name: 4. Setup KernelSU (Provide the missing directory)
         run: |
-          # We create the exact folder structure the Makefile demands: ../toolchain/clang-r416183b
-          mkdir -p ${{ github.workspace }}/toolchain
-          git clone --depth=1 https://github.com/kdrag0n/proton-clang.git ${{ github.workspace }}/toolchain/clang-r416183b
-
-      - name: 4. Setup KernelSU (Satisfy Hardcoded Kconfig)
-        run: |
-          # The developer already edited the config files. We JUST need to provide the folder.
-          cd ${{ github.workspace }}/kernel/drivers
+          cd $GITHUB_WORKSPACE/kernel/drivers
+          # Remove any existing link and clone the actual source
           rm -rf kernelsu
           git clone --depth=1 https://github.com/rifsxd/KernelSU-Next kernelsu
 
-      - name: 5. Compile Kernel
+      - name: 5. Execute Build
         run: |
-          cd ${{ github.workspace }}/kernel
+          # Move into the kernel directory
+          cd $GITHUB_WORKSPACE/kernel
+          
+          # Create the output directory
           mkdir -p out
           
-          # Since the Makefile already has the paths hardcoded, we just run make.
-          # LLVM_IAS=0 is kept to prevent assembly crashes.
+          # Force the compiler into the environment path just in case
+          export PATH="$GITHUB_WORKSPACE/toolchain/clang-r416183b/bin:$PATH"
+          
+          # Run the build
+          # LLVM=1 and LLVM_IAS=0 are standard for this 4.19 source
           make O=out ARCH=arm64 vendor/a23_eur_open_mizkernel_defconfig
           make -j$(nproc) O=out ARCH=arm64 LLVM=1 LLVM_IAS=0
 
       - name: 6. Package AnyKernel3
         run: |
-          cd ${{ github.workspace }}
+          cd $GITHUB_WORKSPACE
           git clone --depth=1 https://github.com/osm0sis/AnyKernel3.git AnyKernel3
           cd AnyKernel3
           
-          # Remove strict device checks
+          # Patch script for a23
           sed -i 's/do.devicecheck=1/do.devicecheck=0/g' anykernel.sh
           sed -i 's!block=.*!block=auto;!g' anykernel.sh
           
-          # Copy any generated Image file
-          cp ../kernel/out/arch/arm64/boot/Image* . || true
+          # Copy the Image
+          cp $GITHUB_WORKSPACE/kernel/out/arch/arm64/boot/Image* . || true
           
-          zip -r9 ../MizKernel-A23-Flashable.zip * -x .git README.md *placeholder
+          zip -r9 ../MizKernel-A23-Flashable.zip * -x .git README.md
 
-      - name: 7. Upload
+      - name: 7. Upload Result
         uses: actions/upload-artifact@v4
         with:
-          name: MizKernel-A23-Zip
+          name: MizKernel-A23
           path: MizKernel-A23-Flashable.zip
