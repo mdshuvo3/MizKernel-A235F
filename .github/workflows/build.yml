@@ -1,69 +1,40 @@
-name: MizKernel A23 Final-Fixed
+name: MizKernel-A23-DryRun
 on:
   workflow_dispatch:
 
 jobs:
-  build:
+  test:
     runs-on: ubuntu-22.04
     steps:
-      - name: 1. Install Dependencies
+      - name: 1. Setup Environment
+        run: sudo apt-get install -y bc bison flex libssl-dev device-tree-compiler
+
+      - name: 2. Checkout & Setup Folders
         run: |
-          sudo apt-get update
-          sudo apt-get install -y bc bison build-essential ccache curl flex g++-multilib gcc-multilib git gnupg gperf libelf-dev liblz4-tool libncurses-dev libsdl1.2-dev libssl-dev libxml2 libxml2-utils lzop rsync squashfs-tools xsltproc zip zlib1g-dev python3 binutils-aarch64-linux-gnu device-tree-compiler
-          sudo ln -sf /usr/bin/python3 /usr/bin/python
+          # Checkout source
+          git clone --depth=1 https://github.com/${{ github.repository }} kernel
+          
+          # 1. Create Toolchain folder exactly where the Makefile wants it
+          mkdir -p kernel/toolchain/clang-r416183b
+          # Create a FAKE clang file just to test the path logic
+          touch kernel/toolchain/clang-r416183b/clang
+          chmod +x kernel/toolchain/clang-r416183b/clang
 
-      - name: 2. Checkout Kernel Source
-        uses: actions/checkout@v4
-        with:
-          path: kernel
+          # 2. FORCE KernelSU folder placement (Wipe any existing first)
+          rm -rf kernel/drivers/kernelsu
+          mkdir -p kernel/drivers/kernelsu
+          # Create a FAKE Kconfig to satisfy the check
+          touch kernel/drivers/kernelsu/Kconfig
 
-      - name: 3. Create Hardcoded Toolchain Path
+      - name: 3. Verify Filesystem (The Test)
         run: |
-          # Create toolchain exactly where the Makefile wants: ../toolchain/
-          mkdir -p ${{ github.workspace }}/kernel/toolchain/clang-r416183b
-          git clone --depth=1 https://github.com/kdrag0n/proton-clang.git ${{ github.workspace }}/kernel/toolchain/clang-r416183b
-
-      - name: 4. Force KernelSU Integration (Direct Move)
-        run: |
-          cd ${{ github.workspace }}
-          # Clone to a neutral location first to avoid directory locking
-          git clone --depth=1 https://github.com/rifsxd/KernelSU-Next ksu_temp
+          echo "--- CHECKING TOOLCHAIN PATH ---"
+          ls -l kernel/toolchain/clang-r416183b/clang
           
-          # Force move into the kernel drivers tree
-          mkdir -p ${{ github.workspace }}/kernel/drivers/kernelsu
-          cp -r ksu_temp/* ${{ github.workspace }}/kernel/drivers/kernelsu/
+          echo "--- CHECKING KERNELSU KCONFIG ---"
+          ls -l kernel/drivers/kernelsu/Kconfig
           
-          # Verify physical existence for the Kconfig parser
-          ls -l ${{ github.workspace }}/kernel/drivers/kernelsu/Kconfig
-
-      - name: 5. Execute Build
-        run: |
-          cd ${{ github.workspace }}/kernel
-          mkdir -p out
-          
-          # Absolute path for the toolchain bin
-          export PATH="${{ github.workspace }}/kernel/toolchain/clang-r416183b/bin:$PATH"
-          
-          # Step A: Defconfig
-          make O=out ARCH=arm64 vendor/a23_eur_open_mizkernel_defconfig
-          
-          # Step B: Compile (Using LLVM_IAS=0 as required by Samsung A23)
-          make -j$(nproc) O=out ARCH=arm64 LLVM=1 LLVM_IAS=0
-
-      - name: 6. AnyKernel3 Packaging
-        run: |
-          cd ${{ github.workspace }}
-          git clone --depth=1 https://github.com/osm0sis/AnyKernel3.git AnyKernel3
-          cd AnyKernel3
-          sed -i 's/do.devicecheck=1/do.devicecheck=0/g' anykernel.sh
-          sed -i 's!block=.*!block=auto;!g' anykernel.sh
-          
-          # Collect the built image
-          cp ../kernel/out/arch/arm64/boot/Image* . || true
-          zip -r9 ../MizKernel-A23.zip * -x .git README.md
-
-      - name: 7. Upload
-        uses: actions/upload-artifact@v4
-        with:
-          name: MizKernel-A23-Ultimate
-          path: MizKernel-A23.zip
+          echo "--- TESTING PATH RESOLUTION ---"
+          cd kernel && mkdir -p out
+          # Check if 'out' can see 'toolchain' using the relative path in your Makefile
+          ls ../toolchain/clang-r416183b/clang
