@@ -19,37 +19,35 @@ jobs:
 
       - name: 3. Create Hardcoded Toolchain Path
         run: |
-          # Satisfies the ../toolchain/clang-r416183b/ requirement
+          # Create toolchain exactly where the Makefile wants: ../toolchain/
           mkdir -p ${{ github.workspace }}/kernel/toolchain/clang-r416183b
           git clone --depth=1 https://github.com/kdrag0n/proton-clang.git ${{ github.workspace }}/kernel/toolchain/clang-r416183b
 
-      - name: 4. Secure KernelSU Placement
+      - name: 4. Force KernelSU Integration (Direct Move)
         run: |
-          # Move to the actual drivers directory in the source
-          cd ${{ github.workspace }}/kernel/drivers
+          cd ${{ github.workspace }}
+          # Clone to a neutral location first to avoid directory locking
+          git clone --depth=1 https://github.com/rifsxd/KernelSU-Next ksu_temp
           
-          # Clean and Clone
-          rm -rf kernelsu
-          git clone --depth=1 https://github.com/rifsxd/KernelSU-Next kernelsu
+          # Force move into the kernel drivers tree
+          mkdir -p ${{ github.workspace }}/kernel/drivers/kernelsu
+          cp -r ksu_temp/* ${{ github.workspace }}/kernel/drivers/kernelsu/
           
-          # SAFETY: If the Kconfig is still "missing", we force-verify the file exists
-          if [ ! -f "kernelsu/Kconfig" ]; then
-            echo "CRITICAL: KernelSU Kconfig not found after clone!"
-            exit 1
-          fi
+          # Verify physical existence for the Kconfig parser
+          ls -l ${{ github.workspace }}/kernel/drivers/kernelsu/Kconfig
 
       - name: 5. Execute Build
         run: |
           cd ${{ github.workspace }}/kernel
           mkdir -p out
           
-          # Add toolchain to PATH as a global backup
+          # Absolute path for the toolchain bin
           export PATH="${{ github.workspace }}/kernel/toolchain/clang-r416183b/bin:$PATH"
           
-          # Step A: Defconfig (This is where it failed last time)
+          # Step A: Defconfig
           make O=out ARCH=arm64 vendor/a23_eur_open_mizkernel_defconfig
           
-          # Step B: Compile
+          # Step B: Compile (Using LLVM_IAS=0 as required by Samsung A23)
           make -j$(nproc) O=out ARCH=arm64 LLVM=1 LLVM_IAS=0
 
       - name: 6. AnyKernel3 Packaging
@@ -60,7 +58,7 @@ jobs:
           sed -i 's/do.devicecheck=1/do.devicecheck=0/g' anykernel.sh
           sed -i 's!block=.*!block=auto;!g' anykernel.sh
           
-          # Collect the built kernel
+          # Collect the built image
           cp ../kernel/out/arch/arm64/boot/Image* . || true
           zip -r9 ../MizKernel-A23.zip * -x .git README.md
 
@@ -69,4 +67,3 @@ jobs:
         with:
           name: MizKernel-A23-Ultimate
           path: MizKernel-A23.zip
-        
