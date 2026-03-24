@@ -49,7 +49,4 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: Flashable-MizKernel-A23
-          path: AnyKernel3-MizKernel-A23.zip        uses: actions/upload-artifact@v4
-        with:
-          name: Flashable-MizKernel-A23
           path: AnyKernel3-MizKernel-A23.zip
