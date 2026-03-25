@@ -19,10 +19,11 @@ jobs:
         run: |
           sudo swapoff -a || true
           sudo rm -f /swap_mizkernel
-          sudo dd if=/dev/zero of=/swap_mizkernel bs=1M count=8192
+          sudo dd if=/dev/zero of=/swap_mizkernel bs=1M count=10240
           sudo chmod 600 /swap_mizkernel
           sudo mkswap /swap_mizkernel
           sudo swapon /swap_mizkernel
+          free -h
 
       - name: 3. Pull Source & Toolchain
         run: |
@@ -43,28 +44,32 @@ jobs:
           # Fix 1: Header Prototypes
           sed -i 's/void ksu_persistent_allow_list()/void ksu_persistent_allow_list(void)/g' drivers/kernelsu/allowlist.h
           
-          # Fix 2: VFS Hooks (Using absolute-style paths relative to kernel root)
-          # We add the include after the first linux include
+          # Fix 2: VFS Hooks
+          # Inject include after linux/compiler.h
           sed -i '/#include <linux\/compiler.h>/a #include "../drivers/kernelsu/allowlist.h"' fs/read_write.c
           
-          # Hook vfs_read/write - Using escaped tabs for valid C syntax
-          if ! grep -q "ksu_handle_allowlist" fs/read_write.c; then
-             sed -i '/ret = vfs_read(file, buf, count, pos);/a \\tksu_handle_allowlist(file, buf, count, \&ret);' fs/read_write.c
-             sed -i '/ret = vfs_write(file, buf, count, pos);/a \\tksu_handle_allowlist(file, buf, count, \&ret);' fs/read_write.c
+          # Inject hooks into vfs_read and vfs_write
+          # We use double backslashes for the tab and the ampersand for GitHub Actions compatibility
+          sed -i '/ret = vfs_read(file, buf, count, pos);/a \\tksu_handle_allowlist(file, buf, count, \&ret);' fs/read_write.c
+          sed -i '/ret = vfs_write(file, buf, count, pos);/a \\tksu_handle_allowlist(file, buf, count, \&ret);' fs/read_write.c
+
+          # Fix 3: Samsung Techpack Path Robustness
+          TAS_CODEC="techpack/audio/asoc/codecs/tas256x/os_layer/src/tas256x-codec.c"
+          TAS_MAKEFILE="techpack/audio/asoc/codecs/tas256x/Makefile"
+          
+          if [ -f "$TAS_CODEC" ]; then
+            # Remove the broken relative path and use a local include
+            sed -i 's|#include "../../../physical_layer/inc/tas256x.h"|#include "tas256x.h"|g' "$TAS_CODEC"
+            # Tell the compiler where to find that header via the Makefile
+            echo "ccflags-y += -I\$(srctree)/techpack/audio/asoc/codecs/tas256x/physical_layer/inc" >> "$TAS_MAKEFILE"
           fi
 
-          # Fix 3: Samsung Techpack Paths (The robust way)
-          # Instead of relative pathing, we add the include directory to the techpack Makefile
-          TAS_DIR="techpack/audio/asoc/codecs/tas256x"
-          if [ -d "$TAS_DIR" ]; then
-            echo "ccflags-y += -I\$(srctree)/$TAS_DIR/physical_layer/inc" >> $TAS_DIR/Makefile
-            # Revert any previous broken sed attempts on the .c file
-            sed -i 's|#include "../../../physical_layer/inc/tas256x.h"|#include "tas256x.h"|g' $TAS_DIR/os_layer/src/tas256x-codec.c
-          fi
-
-      - name: 6. Start Compilation
+      - name: 6. Verify Fixes & Start Compilation
         run: |
           cd kernel
+          # Quick verification check
+          grep -q "ksu_handle_allowlist" fs/read_write.c || (echo "VFS Hook Failed!" && exit 1)
+          
           chmod +x scripts/config
           export PATH="$GITHUB_WORKSPACE/toolchain/clang/bin:$PATH"
           
@@ -85,7 +90,7 @@ jobs:
           ./scripts/config --enable CONFIG_KSU
           make $ARGS olddefconfig
           
-          # Using -j2 to prevent OOM while keeping it faster than -j1
+          # Using -j$(nproc) but limiting to 2 to prevent RAM exhaustion
           make -j2 $ARGS
 
       - name: 7. Build AnyKernel3
