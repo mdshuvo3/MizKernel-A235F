@@ -1,4 +1,4 @@
-Name: MizKernel-A23-KSU-Next
+name: MizKernel-A23-KSU-Next
 on:
   workflow_dispatch:
 
@@ -44,17 +44,6 @@ jobs:
           # Fix 1: Header Prototypes
           sed -i 's/void ksu_persistent_allow_list()/void ksu_persistent_allow_list(void)/g' drivers/kernelsu/allowlist.h
           
-          # Fix 2: Precise VFS Hook Injection (Improved)
+          # Fix 2: Precise VFS Hook Injection
           if ! grep -q "kernelsu/allowlist.h" fs/read_write.c; then
-            sed -i '1i #include "../drivers/kernelsu/allowlist.h"' fs/read_write.c
-          fi
-          
-          # Inject hooks before return ret; in vfs_read and vfs_write
-          # This uses a more robust pattern to find the end of the functions
-          sed -i '/ssize_t vfs_read/,/return ret;/ s/return ret;/ksu_handle_allowlist(file, buf, count, \&ret);\n\treturn ret;/' fs/read_write.c
-          sed -i '/ssize_t vfs_write/,/return ret;/ s/return ret;/ksu_handle_allowlist(file, buf, count, \&ret);\n\treturn ret;/' fs/read_write.c
-
-          # Fix 3: Samsung Techpack Path Robustness
-          TAS_MAKEFILE="techpack/audio/asoc/codecs/tas256x/Makefile"
-          if [ -f "$TAS_MAKEFILE" ]; then
-            echo "ccflags-y += -I\$(srctree)/techpack/audio/
+            sed -i
