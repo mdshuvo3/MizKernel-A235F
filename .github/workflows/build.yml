@@ -48,9 +48,9 @@ jobs:
           # Prepend header to fs/read_write.c
           echo '#include "../drivers/kernelsu/allowlist.h"' | cat - fs/read_write.c > fs/read_write.c.tmp && mv fs/read_write.c.tmp fs/read_write.c
           
-          # Inject hooks
-          sed -i 's/return ret;/ksu_handle_allowlist(file, buf, count, \&ret);\n\treturn ret;/g' fs/read_write.c
-          sed -i 's/return (ret);/ksu_handle_allowlist(file, buf, count, \&ret);\n\treturn (ret);/g' fs/read_write.c
+          # Inject hooks (using @ as delimiter to avoid path slash conflicts)
+          sed -i 's@return ret;@ksu_handle_allowlist(file, buf, count, \&ret);\n\treturn ret;@g' fs/read_write.c
+          sed -i 's@return (ret);@ksu_handle_allowlist(file, buf, count, \&ret);\n\treturn (ret);@g' fs/read_write.c
 
           # Fix 3: Samsung Techpack Path Robustness
           TAS_CODEC="techpack/audio/asoc/codecs/tas256x/os_layer/src/tas256x-codec.c"
@@ -68,11 +68,50 @@ jobs:
       - name: 6. Verify Fixes & Start Compilation
         run: |
           cd kernel
-          grep -C 2 "ksu_handle_allowlist" fs/read_write.c || (echo "VFS Hook Injection Failed!" && exit 1)
+          # Check hook injection
+          grep "ksu_handle_allowlist" fs/read_write.c || (echo "VFS Hook Injection Failed!" && exit 1)
           
           chmod +x scripts/config
           export PATH="$GITHUB_WORKSPACE/toolchain/clang/bin:$PATH"
           
+          # Cleaned up ARGS definition
           ARGS="ARCH=arm64 \
                 CC=clang \
-                LD
+                LD=ld.lld \
+                AR=llvm-ar \
+                NM=llvm-nm \
+                OBJCOPY=llvm-objcopy \
+                OBJDUMP=llvm-objdump \
+                STRIP=llvm-strip \
+                CROSS_COMPILE=aarch64-linux-gnu- \
+                CROSS_COMPILE_ARM32=arm-linux-gnueabi- \
+                LLVM=1 \
+                LLVM_IAS=1 \
+                KCFLAGS=-I$GITHUB_WORKSPACE/kernel/drivers/kernelsu"
+
+          make $ARGS vendor/a23_eur_open_mizkernel_defconfig
+          ./scripts/config --enable CONFIG_KSU
+          # Note: Old kernels might need olddefconfig to apply the new KSU config
+          make $ARGS olddefconfig
+          
+          # Try building with all cores, fallback to 2 cores if it OOMs (Out of Memory)
+          make -j$(nproc --all) $ARGS || make -j2 $ARGS
+
+      - name: 7. Build AnyKernel3
+        run: |
+          git clone --depth=1 https://github.com/osm0sis/AnyKernel3.git AK3
+          cd AK3
+          sed -i 's/do.devicecheck=1/do.devicecheck=0/g' anykernel.sh
+          sed -i 's!block=.*!block=auto;!g' anykernel.sh
+          # Look for the kernel image and copy it
+          find ../kernel/arch/arm64/boot/ -name "Image*" -exec cp {} . \;
+          zip -r9 ../MizKernel-A23-KSU-Next.zip *
+
+      - name: 8. Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: MizKernel-A235F-${{ github.run_id }}
+          name: MizKernel A235F Build ${{ github.run_number }}
+          files: MizKernel-A23-KSU-Next.zip
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
