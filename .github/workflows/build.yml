@@ -44,14 +44,16 @@ jobs:
           # Fix 1: Header Prototypes
           sed -i 's/void ksu_persistent_allow_list()/void ksu_persistent_allow_list(void)/g' drivers/kernelsu/allowlist.h
           
-          # Fix 2: Precise VFS Hook Injection
+          # Fix 2: Precise VFS Hook Injection via Function Return targeting
+          # We add the header
           if ! grep -q "kernelsu/allowlist.h" fs/read_write.c; then
-            echo '#include "../drivers/kernelsu/allowlist.h"' | cat - fs/read_write.c > fs/read_write.c.tmp && mv fs/read_write.c.tmp fs/read_write.c
+            sed -i '1i #include "../drivers/kernelsu/allowlist.h"' fs/read_write.c
           fi
           
-          # Use a regex that matches EXPORT_SYMBOL or EXPORT_SYMBOL_GPL
-          sed -i '/EXPORT_SYMBOL.*(vfs_read);/i \		ksu_handle_allowlist(file, buf, count, \&ret);' fs/read_write.c
-          sed -i '/EXPORT_SYMBOL.*(vfs_write);/i \		ksu_handle_allowlist(file, buf, count, \&ret);' fs/read_write.c
+          # We target the end of vfs_read and vfs_write specifically
+          # This looks for the 'return ret;' inside those specific functions
+          sed -i '/ssize_t vfs_read/,/return ret;/ s/return ret;/ksu_handle_allowlist(file, buf, count, \&ret);\n\treturn ret;/' fs/read_write.c
+          sed -i '/ssize_t vfs_write/,/return ret;/ s/return ret;/ksu_handle_allowlist(file, buf, count, \&ret);\n\treturn ret;/' fs/read_write.c
 
           # Fix 3: Samsung Techpack Path Robustness
           TAS_CODEC="techpack/audio/asoc/codecs/tas256x/os_layer/src/tas256x-codec.c"
@@ -72,10 +74,10 @@ jobs:
           HOOK_COUNT=$(grep -c "ksu_handle_allowlist" fs/read_write.c)
           echo "Hook count: $HOOK_COUNT"
           
-          # If the Export Symbol method failed, attempt a fallback to a common return pattern
+          # Check if injection was successful
           if [ "$HOOK_COUNT" -lt 2 ]; then
-            echo "Export symbol injection failed, trying fallback pattern..."
-            sed -i 's/return ret;/ksu_handle_allowlist(file, buf, count, \&ret);\n\treturn ret;/g' fs/read_write.c
+            echo "VFS Hook Injection failed to find targets. Check fs/read_write.c structure."
+            exit 1
           fi
           
           chmod +x scripts/config
@@ -99,7 +101,7 @@ jobs:
           ./scripts/config --enable CONFIG_KSU
           make $ARGS olddefconfig
           
-          # Build with OOM protection
+          # Build
           make -j$(nproc --all) $ARGS || make -j2 $ARGS
 
       - name: 7. Build AnyKernel3
