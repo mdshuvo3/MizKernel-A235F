@@ -1,22 +1,4 @@
-name: Build MizKernel A235F
-
-on:
-  workflow_dispatch:
-
-jobs:
-  build:
-    runs-on: ubuntu-22.04
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Install Dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y bc bison build-essential ccache curl flex g++-multilib gcc-multilib git gnupg gperf libelf-dev liblz4-tool libncurses-dev libsdl1.2-dev libssl-dev libxml2 libxml2-utils rsync squashfs-tools xsltproc zip zlib1g-dev python3 binutils-aarch64-linux-gnu device-tree-compiler
-          sudo ln -sf /usr/bin/python3 /usr/bin/python
-
-      - name: Clone Toolchain and Source
+- name: Clone Toolchain and Source
         run: |
           git clone --depth=1 https://github.com/kdrag0n/proton-clang clang
           git clone --depth=1 https://github.com/mdshuvo3/MizKernel-A235F source
@@ -25,40 +7,22 @@ jobs:
       - name: Patch Kernel and Techpack
         run: |
           cd source
-          # Inject KernelSU-Next
-          cp -r ../ksu/kernel drivers/kernelsu
-          echo "obj-y += kernelsu/" >> drivers/Makefile
           
-          # Fix the tas256x header path error
-          # This points the broken include to the correct relative path
-          sed -i 's|#include "physical_layer/inc/tas256x.h"|#include "../../../physical_layer/inc/tas256x.h"|' techpack/audio/asoc/codecs/tas256x/os_layer/src/tas256x-codec.c
+          # Clean up any existing KernelSU artifacts and inject fresh source
+          rm -rf drivers/kernelsu
+          cp -r ../ksu/kernel drivers/kernelsu
+          
+          # Ensure drivers/Makefile includes kernelsu if not already there
+          if ! grep -q "obj-y += kernelsu/" drivers/Makefile; then
+            echo "obj-y += kernelsu/" >> drivers/Makefile
+          fi
+
+          # Fix the tas256x header path error (using absolute path logic)
+          find techpack/audio/asoc/codecs/tas256x -name "tas256x-codec.c" -exec sed -i 's|#include "physical_layer/inc/tas256x.h"|#include "../../../physical_layer/inc/tas256x.h"|' {} +
 
           # Apply VFS Patches for KernelSU
-          sed -i '/vfs_read/i int ksu_handle_allowlist(int fd);' fs/read_write.c
-          sed -i '/ssize_t vfs_read(struct file/a \\tksu_handle_allowlist(fd);' fs/read_write.c
-
-      - name: Build Kernel
-        run: |
-          cd source
-          export PATH=$(pwd)/../clang/bin:$PATH
-          make O=out ARCH=arm64 a23_defconfig
-          make -j$(nproc --all) O=out \
-            ARCH=arm64 \
-            CC=clang \
-            CLANG_TRIPLE=aarch64-linux-gnu- \
-            CROSS_COMPILE=aarch64-linux-gnu- \
-            LLVM=1 \
-            LLVM_IAS=0
-
-      - name: Package AnyKernel3
-        run: |
-          git clone https://github.com/osm0sis/AnyKernel3
-          cp source/out/arch/arm64/boot/Image.gz-dtb AnyKernel3/
-          cd AnyKernel3
-          zip -r ../MizKernel-A235F-Final.zip *
-
-      - name: Upload Artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: MizKernel-A235F
-          path: MizKernel-A235F-Final.zip
+          # Prevent duplicate patches if the workflow is re-run
+          if ! grep -q "ksu_handle_allowlist" fs/read_write.c; then
+            sed -i '/vfs_read/i int ksu_handle_allowlist(int fd);' fs/read_write.c
+            sed -i '/ssize_t vfs_read(struct file/a \\tksu_handle_allowlist(fd);' fs/read_write.c
+          fi
