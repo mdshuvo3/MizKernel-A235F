@@ -1,4 +1,4 @@
-name: Build MizKernel A235F
+name: Build MizKernel A235F Final
 
 on:
   workflow_dispatch:
@@ -18,42 +18,64 @@ jobs:
 
       - name: Clone Toolchain and Source
         run: |
+          # 1. Clone everything
           git clone --depth=1 https://github.com/kdrag0n/proton-clang clang
           git clone --depth=1 https://github.com/mdshuvo3/MizKernel-A235F source
           git clone --depth=1 https://github.com/rifsxd/KernelSU-Next ksu
+          
+          # 2. FIX: Create the hardcoded toolchain path the kernel expects
+          mkdir -p toolchain
+          ln -sf $(pwd)/clang $(pwd)/toolchain/clang-r416183b
 
       - name: Patch Kernel and Techpack
         run: |
           cd source
           
-          # Fix: Remove existing file/placeholder to allow directory copy
+          # 3. FIX: Clean up and inject KernelSU-Next
           rm -rf drivers/kernelsu
           cp -r ../ksu/kernel drivers/kernelsu
-          
-          # Add KernelSU to the drivers Makefile if not present
           if ! grep -q "obj-y += kernelsu/" drivers/Makefile; then
             echo "obj-y += kernelsu/" >> drivers/Makefile
           fi
 
-          # Fix the tas256x-codec header path error
-          find techpack/audio/asoc/codecs/tas256x -name "tas256x-codec.c" -exec sed -i 's|#include "physical_layer/inc/tas256x.h"|#include "../../../physical_layer/inc/tas256x.h"|' {} +
-
-          # Apply VFS Patches for KernelSU-Next
+          # 4. FIX: Patch VFS for KernelSU-Next
           if ! grep -q "ksu_handle_allowlist" fs/read_write.c; then
-            sed -i '/vfs_read/i int ksu_handle_allowlist(int fd);' fs/read_write.c
+            sed -i '/vfs_read(struct file/i int ksu_handle_allowlist(int fd);' fs/read_write.c
             sed -i '/ssize_t vfs_read(struct file/a \\tksu_handle_allowlist(fd);' fs/read_write.c
           fi
+
+          # 5. FIX: Resolve the tas256x-codec.h "file not found" error
+          find techpack/audio/asoc/codecs/tas256x -name "tas256x-codec.c" -exec sed -i 's|#include "physical_layer/inc/tas256x.h"|#include "../../../physical_layer/inc/tas256x.h"|' {} +
 
       - name: Build Kernel
         run: |
           cd source
+          # Add our cloned clang to path (though the symlink handles most calls)
           export PATH=$(pwd)/../clang/bin:$PATH
-          # Set up build environment
+          
           make O=out ARCH=arm64 a23_defconfig
-          # Execute build
+          
           make -j$(nproc --all) O=out \
             ARCH=arm64 \
             CC=clang \
             CLANG_TRIPLE=aarch64-linux-gnu- \
             CROSS_COMPILE=aarch64-linux-gnu- \
-            LLVM
+            LLVM=1 \
+            LLVM_IAS=0
+
+      - name: Package AnyKernel3
+        run: |
+          git clone https://github.com/osm0sis/AnyKernel3
+          if [ -f source/out/arch/arm64/boot/Image.gz-dtb ]; then
+            cp source/out/arch/arm64/boot/Image.gz-dtb AnyKernel3/
+          else
+            cp source/out/arch/arm64/boot/Image AnyKernel3/
+          fi
+          cd AnyKernel3
+          zip -r ../MizKernel-A235F-Final.zip *
+
+      - name: Upload Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: MizKernel-A235F-KSU-Next
+          path: MizKernel-A235F-Final.zip
