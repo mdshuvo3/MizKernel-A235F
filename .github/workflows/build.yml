@@ -1,4 +1,5 @@
-name: MizKernel-A23-KSU-Next
+name: Build MizKernel A235F
+
 on:
   workflow_dispatch:
 
@@ -6,87 +7,58 @@ jobs:
   build:
     runs-on: ubuntu-22.04
     steps:
-      - name: 1. Environment Setup
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y bc bison build-essential ccache curl flex g++-multilib gcc-multilib git gnupg gperf libelf-dev liblz4-tool libncurses-dev libsdl1.2-dev libssl-dev libxml2 libxml2-utils rsync squashfs-tools xsltproc zip zlib1g-dev python3 binutils-aarch64-linux-gnu device-tree-compiler
           sudo ln -sf /usr/bin/python3 /usr/bin/python
 
-      - name: 2. Pull Source & Toolchain
+      - name: Clone Toolchain and Source
         run: |
-          git clone --depth=1 https://github.com/${{ github.repository }} kernel
-          mkdir -p toolchain/clang-r416183b
-          git clone --depth=1 https://github.com/kdrag0n/proton-clang.git toolchain/clang-r416183b
+          git clone --depth=1 https://github.com/kdrag0n/proton-clang clang
+          git clone --depth=1 https://github.com/mdshuvo3/MizKernel-A235F source
+          git clone --depth=1 https://github.com/rifsxd/KernelSU-Next ksu
 
-      - name: 3. Inject KernelSU-Next
+      - name: Patch Kernel and Techpack
         run: |
-          git clone --depth=1 https://github.com/rifsxd/KernelSU-Next ksu_src
-          rm -rf kernel/drivers/kernelsu
-          mkdir -p kernel/drivers/kernelsu
-          rsync -av ksu_src/kernel/ kernel/drivers/kernelsu/
-
-      - name: 4. Surgical Code Fixes
-        run: |
-          cd kernel
+          cd source
+          # Inject KernelSU-Next
+          cp -r ../ksu/kernel drivers/kernelsu
+          echo "obj-y += kernelsu/" >> drivers/Makefile
           
-          # FIX 1: Strict Prototypes Error (Fixes the 'void ksu_persistent_allow_list()' error)
-          # Clang requires (void) instead of empty () for function definitions
-          sed -i 's/void ksu_persistent_allow_list()/void ksu_persistent_allow_list(void)/g' drivers/kernelsu/allowlist.h
-          
-          # FIX 2: VFS Hooks in read_write.c
-          # We place the include and the hook before the standard vfs_read call
-          sed -i '/ssize_t vfs_read(struct file/i #include "../drivers/kernelsu/allowlist.h"' fs/read_write.c
-          sed -i '/if (unlikely(ret >= 0))/i \	ksu_handle_allowlist(file, buf, count, &ret);' fs/read_write.c
+          # Fix the tas256x header path error
+          # This points the broken include to the correct relative path
+          sed -i 's|#include "physical_layer/inc/tas256x.h"|#include "../../../physical_layer/inc/tas256x.h"|' techpack/audio/asoc/codecs/tas256x/os_layer/src/tas256x-codec.c
 
-          # FIX 3: KernelSU Symbol Conflicts
-          # This prevents naming collisions with the stock kernel
-          find drivers/kernelsu -name "*.c" -exec sed -i 's/vfs_stat(/ksu_vfs_stat(/g' {} +
-          find drivers/kernelsu -name "*.c" -exec sed -i 's/vfs_fstatat(/ksu_vfs_fstatat(/g' {} +
+          # Apply VFS Patches for KernelSU
+          sed -i '/vfs_read/i int ksu_handle_allowlist(int fd);' fs/read_write.c
+          sed -i '/ssize_t vfs_read(struct file/a \\tksu_handle_allowlist(fd);' fs/read_write.c
 
-          # FIX 4: Build System Integration
-          if ! grep -q "kernelsu/Kconfig" drivers/Kconfig; then
-            sed -i '/endmenu/i source "drivers/kernelsu/Kconfig"' drivers/Kconfig
-          fi
-          if ! grep -q "kernelsu/" drivers/Makefile; then
-            echo 'obj-y += kernelsu/' >> drivers/Makefile
-          fi
-
-      - name: 5. Start Compilation
+      - name: Build Kernel
         run: |
-          cd kernel
-          export PATH="$GITHUB_WORKSPACE/toolchain/clang-r416183b/bin:$PATH"
-          
-          ARGS="ARCH=arm64 \
-                CC=clang \
-                LD=ld.lld \
-                AR=llvm-ar \
-                NM=llvm-nm \
-                OBJCOPY=llvm-objcopy \
-                OBJDUMP=llvm-objdump \
-                STRIP=llvm-strip \
-                CROSS_COMPILE=aarch64-linux-gnu- \
-                CROSS_COMPILE_ARM32=arm-linux-gnueabi- \
-                LLVM=1 \
-                LLVM_IAS=0"
+          cd source
+          export PATH=$(pwd)/../clang/bin:$PATH
+          make O=out ARCH=arm64 a23_defconfig
+          make -j$(nproc --all) O=out \
+            ARCH=arm64 \
+            CC=clang \
+            CLANG_TRIPLE=aarch64-linux-gnu- \
+            CROSS_COMPILE=aarch64-linux-gnu- \
+            LLVM=1 \
+            LLVM_IAS=0
 
-          make $ARGS vendor/a23_eur_open_mizkernel_defconfig
-          echo "CONFIG_KSU=y" >> .config
-          make $ARGS olddefconfig
-          
-          # Attempt parallel build, fall back to single-core if it errors for detailed logs
-          make -j$(nproc) $ARGS || make -j1 $ARGS
-
-      - name: 6. Build AnyKernel3 Flashable Zip
+      - name: Package AnyKernel3
         run: |
-          git clone --depth=1 https://github.com/osm0sis/AnyKernel3.git AK3
-          cd AK3
-          sed -i 's/do.devicecheck=1/do.devicecheck=0/g' anykernel.sh
-          sed -i 's!block=.*!block=auto;!g' anykernel.sh
-          cp ../kernel/arch/arm64/boot/Image* . || true
-          zip -r9 ../MizKernel-A23-KSU-Next.zip *
+          git clone https://github.com/osm0sis/AnyKernel3
+          cp source/out/arch/arm64/boot/Image.gz-dtb AnyKernel3/
+          cd AnyKernel3
+          zip -r ../MizKernel-A235F-Final.zip *
 
-      - name: 7. Upload Artifact
+      - name: Upload Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: MizKernel-Build
-          path: MizKernel-A23-KSU-Next.zip
+          name: MizKernel-A235F
+          path: MizKernel-A235F-Final.zip
