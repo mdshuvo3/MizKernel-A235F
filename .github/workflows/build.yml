@@ -45,21 +45,15 @@ jobs:
           sed -i 's/void ksu_persistent_allow_list()/void ksu_persistent_allow_list(void)/g' drivers/kernelsu/allowlist.h
           
           # Fix 2: Precise VFS Hook Injection
-          # Adding the header to the top
           sed -i '1i #include "../drivers/kernelsu/allowlist.h"' fs/read_write.c
-          
-          # Injecting the hook before the return statement in vfs_read and vfs_write
-          # We use a simpler match to avoid shell escaping issues
-          sed -i 's/return ret; \/* for vfs_read *\//ksu_handle_allowlist(file, buf, count, \&ret);\n\treturn ret;/g' fs/read_write.c || true
-          # Fallback: if the comment-based match fails, use the standard one
           sed -i '/ssize_t vfs_read/,/return ret;/ s/return ret;/ksu_handle_allowlist(file, buf, count, \&ret);\n\treturn ret;/' fs/read_write.c
           sed -i '/ssize_t vfs_write/,/return ret;/ s/return ret;/ksu_handle_allowlist(file, buf, count, \&ret);\n\treturn ret;/' fs/read_write.c
 
-          # Fix 3: Samsung Techpack Path Robustness
-          TAS_CODEC="techpack/audio/asoc/codecs/tas256x/os_layer/src/tas256x-codec.c"
+          # Fix 3: Samsung Techpack Path Robustness (Fixed for TAS256X)
+          # We force the compiler to look in the physical_layer/inc folder for the missing header
           TAS_MAKEFILE="techpack/audio/asoc/codecs/tas256x/Makefile"
-          if [ -f "$TAS_CODEC" ]; then
-            sed -i 's|#include "../../../physical_layer/inc/tas256x.h"|#include "tas256x.h"|g' "$TAS_CODEC"
+          if [ -f "$TAS_MAKEFILE" ]; then
+            echo "EXTRA_CFLAGS += -I\$(srctree)/techpack/audio/asoc/codecs/tas256x/physical_layer/inc" >> "$TAS_MAKEFILE"
             echo "ccflags-y += -I\$(srctree)/techpack/audio/asoc/codecs/tas256x/physical_layer/inc" >> "$TAS_MAKEFILE"
           fi
 
@@ -82,7 +76,6 @@ jobs:
           chmod +x scripts/config
           export PATH="$GITHUB_WORKSPACE/toolchain/clang/bin:$PATH"
           
-          # Optimized Build Arguments
           export ARGS="ARCH=arm64 \
                 CC=clang \
                 LD=ld.lld \
@@ -101,7 +94,7 @@ jobs:
           ./scripts/config --enable CONFIG_KSU
           make $ARGS olddefconfig
           
-          # Building with 4 threads for RAM stability
+          # Build with 4 threads
           make -j4 $ARGS
 
       - name: 7. Build AnyKernel3
@@ -110,7 +103,12 @@ jobs:
           cd AK3
           sed -i 's/do.devicecheck=1/do.devicecheck=0/g' anykernel.sh
           sed -i 's!block=.*!block=auto;!g' anykernel.sh
-          cp ../kernel/arch/arm64/boot/Image* . || echo "Kernel image not found"
+          # Check for compressed or uncompressed image
+          if [ -f ../kernel/arch/arm64/boot/Image.gz ]; then
+            cp ../kernel/arch/arm64/boot/Image.gz .
+          else
+            cp ../kernel/arch/arm64/boot/Image .
+          fi
           zip -r9 ../MizKernel-A23-KSU-Next.zip *
 
       - name: 8. Create GitHub Release
