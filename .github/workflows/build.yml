@@ -32,11 +32,11 @@ jobs:
           # FIX 1: Strict Prototypes Error
           sed -i 's/void ksu_persistent_allow_list()/void ksu_persistent_allow_list(void)/g' drivers/kernelsu/allowlist.h
           
-          # FIX 2: VFS Hooks in read_write.c (Improved Pathing and Placement)
-          # Add include to the top of the file to avoid "file not found"
+          # FIX 2: VFS Hooks in read_write.c (Fixed Paths and Variable Access)
+          # Add include using full relative path from fs/ to drivers/
           sed -i '1i #include "../drivers/kernelsu/allowlist.h"' fs/read_write.c
           
-          # Insert hook AFTER 'ret' is assigned in vfs_read and vfs_write
+          # Inject hooks immediately AFTER the return value (ret) is populated
           sed -i '/ret = vfs_read(file, buf, count, pos);/a \	ksu_handle_allowlist(file, buf, count, &ret);' fs/read_write.c
           sed -i '/ret = vfs_write(file, buf, count, pos);/a \	ksu_handle_allowlist(file, buf, count, &ret);' fs/read_write.c
 
@@ -52,16 +52,17 @@ jobs:
             echo 'obj-y += kernelsu/' >> drivers/Makefile
           fi
 
-          # FIX 5: Audio & Camera Techpack Header Path Fixes
+          # FIX 5: Techpack Header Path Fixes (Samsung specific)
           find techpack/audio/asoc/codecs/tas256x -name "tas256x-codec.c" -exec sed -i 's|#include "physical_layer/inc/tas256x.h"|#include "../../../physical_layer/inc/tas256x.h"|' {} +
           sed -i 's|#include "cam_req_mgr_core.h"|#include "../cam_req_mgr/cam_req_mgr_core.h"|' techpack/camera/drivers/cam_utils/cam_trace.h
 
       - name: 5. Start Compilation
         run: |
           cd kernel
-          # Use the full path to the downloaded toolchain for all tools
-          CLANG_BIN="$GITHUB_WORKSPACE/toolchain/clang-r416183b/bin"
-          export PATH="$CLANG_BIN:$PATH"
+          # Fix Permissions for scripts
+          chmod +x scripts/config
+          
+          export PATH="$GITHUB_WORKSPACE/toolchain/clang-r416183b/bin:$PATH"
           
           ARGS="ARCH=arm64 \
                 CC=clang \
@@ -76,13 +77,16 @@ jobs:
                 LLVM=1 \
                 LLVM_IAS=0"
 
+          # 1. Generate default config
           make $ARGS vendor/a23_eur_open_mizkernel_defconfig
           
-          # Force KernelSU Config
-          scripts/config --enable CONFIG_KSU
+          # 2. Enable KernelSU in .config
+          ./scripts/config --enable CONFIG_KSU
+          
+          # 3. Process new dependencies
           make $ARGS olddefconfig
           
-          # Parallel build
+          # 4. Build kernel
           make -j$(nproc) $ARGS
 
       - name: 6. Build AnyKernel3 Flashable Zip
@@ -91,12 +95,14 @@ jobs:
           cd AK3
           sed -i 's/do.devicecheck=1/do.devicecheck=0/g' anykernel.sh
           sed -i 's!block=.*!block=auto;!g' anykernel.sh
-          # Check for the correct output binary path
+          
+          # Copy the compiled image (check both standard and dtb locations)
           if [ -f ../kernel/arch/arm64/boot/Image.gz-dtb ]; then
             cp ../kernel/arch/arm64/boot/Image.gz-dtb .
           elif [ -f ../kernel/arch/arm64/boot/Image ]; then
             cp ../kernel/arch/arm64/boot/Image .
           fi
+          
           zip -r9 ../MizKernel-A23-KSU-Next.zip *
 
       - name: 7. Upload Artifact
