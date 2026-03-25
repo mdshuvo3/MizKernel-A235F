@@ -44,13 +44,15 @@ jobs:
           # Fix 1: Header Prototypes
           sed -i 's/void ksu_persistent_allow_list()/void ksu_persistent_allow_list(void)/g' drivers/kernelsu/allowlist.h
           
-          # Fix 2: VFS Hooks - Using the most robust redirection method
-          # Prepend the header to the very top of the file
+          # Fix 2: VFS Hooks - Final Boss Mode
+          # 1. Prepend the header
           echo '#include "../drivers/kernelsu/allowlist.h"' | cat - fs/read_write.c > fs/read_write.c.tmp && mv fs/read_write.c.tmp fs/read_write.c
           
-          # Inject the hook before every 'return ret;' in fs/read_write.c
-          # This covers both vfs_read and vfs_write regardless of their internal structure
-          sed -i '/return ret;/i \	ksu_handle_allowlist(file, buf, count, \&ret);' fs/read_write.c
+          # 2. Inject the hook. We target 'return ret' with or without parentheses/spaces.
+          # We use a placeholder 'HOOK_HERE' then replace it to avoid escaping issues with tabs.
+          sed -i 's/return ret;/HOOK_HERE\n\treturn ret;/g' fs/read_write.c
+          sed -i 's/return (ret);/HOOK_HERE\n\treturn (ret);/g' fs/read_write.c
+          sed -i "s|HOOK_HERE|ksu_handle_allowlist(file, buf, count, \&ret);|g" fs/read_write.c
 
           # Fix 3: Samsung Techpack Path Robustness
           TAS_CODEC="techpack/audio/asoc/codecs/tas256x/os_layer/src/tas256x-codec.c"
@@ -64,8 +66,8 @@ jobs:
       - name: 6. Verify Fixes & Start Compilation
         run: |
           cd kernel
-          # Check if the hook was actually injected successfully
-          grep -q "ksu_handle_allowlist" fs/read_write.c || (echo "VFS Hook Failed!" && exit 1)
+          # Debug: Print the lines around where we expect the hook to be
+          grep -C 2 "ksu_handle_allowlist" fs/read_write.c || (echo "VFS Hook Injection Failed again!" && exit 1)
           
           chmod +x scripts/config
           export PATH="$GITHUB_WORKSPACE/toolchain/clang/bin:$PATH"
@@ -73,4 +75,37 @@ jobs:
           ARGS="ARCH=arm64 \
                 CC=clang \
                 LD=ld.lld \
-                AR=llvm-ar
+                AR=llvm-ar \
+                NM=llvm-nm \
+                OBJCOPY=llvm-objcopy \
+                OBJDUMP=llvm-objdump \
+                STRIP=llvm-strip \
+                CROSS_COMPILE=aarch64-linux-gnu- \
+                CROSS_COMPILE_ARM32=arm-linux-gnueabi- \
+                LLVM=1 \
+                LLVM_IAS=1"
+
+          make $ARGS vendor/a23_eur_open_mizkernel_defconfig
+          ./scripts/config --enable CONFIG_KSU
+          make $ARGS olddefconfig
+          
+          # j2 to keep RAM usage stable
+          make -j2 $ARGS
+
+      - name: 7. Build AnyKernel3
+        run: |
+          git clone --depth=1 https://github.com/osm0sis/AnyKernel3.git AK3
+          cd AK3
+          sed -i 's/do.devicecheck=1/do.devicecheck=0/g' anykernel.sh
+          sed -i 's!block=.*!block=auto;!g' anykernel.sh
+          find ../kernel/arch/arm64/boot/ -name "Image*" -exec cp {} . \;
+          zip -r9 ../MizKernel-A23-KSU-Next.zip *
+
+      - name: 8. Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: MizKernel-A235F-${{ github.run_id }}
+          name: MizKernel A235F Build ${{ github.run_number }}
+          files: MizKernel-A23-KSU-Next.zip
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
