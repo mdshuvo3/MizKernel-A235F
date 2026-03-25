@@ -17,11 +17,13 @@ jobs:
 
       - name: 2. Maximize Build Space & RAM
         run: |
-          # Create a 4GB Swap file to prevent OOM crashes
-          sudo fallocate -l 4G /swapfile
-          sudo chmod 600 /swapfile
-          sudo mkswap /swapfile
-          sudo swapon /swapfile
+          # Clean up any existing swap and create a fresh one with a unique name
+          sudo swapoff -a || true
+          sudo rm -f /swap_mizkernel
+          sudo dd if=/dev/zero of=/swap_mizkernel bs=1M count=4096
+          sudo chmod 600 /swap_mizkernel
+          sudo mkswap /swap_mizkernel
+          sudo swapon /swap_mizkernel
 
       - name: 3. Pull Source & Toolchain
         run: |
@@ -39,19 +41,27 @@ jobs:
       - name: 5. Surgical Code Fixes
         run: |
           cd kernel
-          # FIX 1: Strict Prototypes
+          # FIX 1: KernelSU Headers
           sed -i 's/void ksu_persistent_allow_list()/void ksu_persistent_allow_list(void)/g' drivers/kernelsu/allowlist.h
           
-          # FIX 2: Robust VFS Hooks in read_write.c
-          # Include at the very top
-          sed -i '1i #include "drivers/kernelsu/allowlist.h"' fs/read_write.c
+          # FIX 2: VFS Hooks in read_write.c
+          # Include at top
+          sed -i '1i #include "../drivers/kernelsu/allowlist.h"' fs/read_write.c
           
-          # Use a more reliable insertion point for vfs_read/write hooks
-          # This avoids "ret undeclared" by placing it after the standard assignment pattern
+          # Inject hooks after the VFS calls. 
+          # We use a pattern that matches the specific Samsung vfs_read/write calls
           sed -i '/ret = vfs_read(file, buf, count, pos);/a \	ksu_handle_allowlist(file, buf, count, &ret);' fs/read_write.c
           sed -i '/ret = vfs_write(file, buf, count, pos);/a \	ksu_handle_allowlist(file, buf, count, &ret);' fs/read_write.c
 
-          # FIX 3: Techpack Header Paths
+          # FIX 3: Build System
+          if ! grep -q "kernelsu/Kconfig" drivers/Kconfig; then
+            sed -i '/endmenu/i source "drivers/kernelsu/Kconfig"' drivers/Kconfig
+          fi
+          if ! grep -q "kernelsu/" drivers/Makefile; then
+            echo 'obj-y += kernelsu/' >> drivers/Makefile
+          fi
+
+          # FIX 4: Samsung Techpack Paths
           find techpack/audio/asoc/codecs/tas256x -name "tas256x-codec.c" -exec sed -i 's|#include "physical_layer/inc/tas256x.h"|#include "../../../physical_layer/inc/tas256x.h"|' {} +
           sed -i 's|#include "cam_req_mgr_core.h"|#include "../cam_req_mgr/cam_req_mgr_core.h"|' techpack/camera/drivers/cam_utils/cam_trace.h
 
@@ -78,7 +88,7 @@ jobs:
           ./scripts/config --enable CONFIG_KSU
           make $ARGS olddefconfig
           
-          # With the 4GB swap file, we can safely try -j$(nproc)
+          # j$(nproc) is safe now with the new swap logic
           make -j$(nproc) $ARGS
 
       - name: 7. Build AnyKernel3
@@ -87,7 +97,6 @@ jobs:
           cd AK3
           sed -i 's/do.devicecheck=1/do.devicecheck=0/g' anykernel.sh
           sed -i 's!block=.*!block=auto;!g' anykernel.sh
-          # Search for the output image
           find ../kernel/arch/arm64/boot/ -name "Image*" -exec cp {} . \;
           zip -r9 ../MizKernel-A23-KSU-Next.zip *
 
@@ -96,11 +105,6 @@ jobs:
         with:
           tag_name: MizKernel-A235F-${{ github.run_id }}
           name: MizKernel A235F Build ${{ github.run_number }}
-          body: |
-            ### MizKernel for Galaxy A23 (SM-A235F)
-            - **Status**: Successful Build
-            - **KernelSU-Next**: Integrated
-            - **Build ID**: ${{ github.run_id }}
           files: MizKernel-A23-KSU-Next.zip
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
