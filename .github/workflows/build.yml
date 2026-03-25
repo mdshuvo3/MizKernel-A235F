@@ -15,58 +15,92 @@ jobs:
           sudo apt-get install -y bc bison build-essential ccache curl flex g++-multilib gcc-multilib git gnupg gperf libelf-dev liblz4-tool libncurses-dev libsdl1.2-dev libssl-dev libxml2 libxml2-utils rsync squashfs-tools xsltproc zip zlib1g-dev python3 binutils-aarch64-linux-gnu device-tree-compiler
           sudo ln -sf /usr/bin/python3 /usr/bin/python
 
-      - name: 2. Pull Source & Toolchain
+      - name: 2. Maximize Build Space & RAM
+        run: |
+          # Create a 4GB Swap file to prevent OOM crashes
+          sudo fallocate -l 4G /swapfile
+          sudo chmod 600 /swapfile
+          sudo mkswap /swapfile
+          sudo swapon /swapfile
+
+      - name: 3. Pull Source & Toolchain
         run: |
           git clone --depth=1 https://github.com/${{ github.repository }} kernel
           mkdir -p toolchain/clang-r416183b
           git clone --depth=1 https://github.com/kdrag0n/proton-clang.git toolchain/clang-r416183b
 
-      - name: 3. Inject KernelSU-Next
+      - name: 4. Inject KernelSU-Next
         run: |
           git clone --depth=1 https://github.com/rifsxd/KernelSU-Next ksu_src
           rm -rf kernel/drivers/kernelsu
           mkdir -p kernel/drivers/kernelsu
           rsync -av ksu_src/kernel/ kernel/drivers/kernelsu/
 
-      - name: 4. Surgical Code Fixes
+      - name: 5. Surgical Code Fixes
         run: |
           cd kernel
+          # FIX 1: Strict Prototypes
           sed -i 's/void ksu_persistent_allow_list()/void ksu_persistent_allow_list(void)/g' drivers/kernelsu/allowlist.h
+          
+          # FIX 2: Robust VFS Hooks in read_write.c
+          # Include at the very top
           sed -i '1i #include "drivers/kernelsu/allowlist.h"' fs/read_write.c
+          
+          # Use a more reliable insertion point for vfs_read/write hooks
+          # This avoids "ret undeclared" by placing it after the standard assignment pattern
           sed -i '/ret = vfs_read(file, buf, count, pos);/a \	ksu_handle_allowlist(file, buf, count, &ret);' fs/read_write.c
           sed -i '/ret = vfs_write(file, buf, count, pos);/a \	ksu_handle_allowlist(file, buf, count, &ret);' fs/read_write.c
+
+          # FIX 3: Techpack Header Paths
           find techpack/audio/asoc/codecs/tas256x -name "tas256x-codec.c" -exec sed -i 's|#include "physical_layer/inc/tas256x.h"|#include "../../../physical_layer/inc/tas256x.h"|' {} +
           sed -i 's|#include "cam_req_mgr_core.h"|#include "../cam_req_mgr/cam_req_mgr_core.h"|' techpack/camera/drivers/cam_utils/cam_trace.h
 
-      - name: 5. Start Compilation
+      - name: 6. Start Compilation
         run: |
           cd kernel
           chmod +x scripts/config
           export PATH="$GITHUB_WORKSPACE/toolchain/clang-r416183b/bin:$PATH"
           
-          ARGS="ARCH=arm64 CC=clang LD=ld.lld AR=llvm-ar NM=llvm-nm OBJCOPY=llvm-objcopy OBJDUMP=llvm-objdump STRIP=llvm-strip CROSS_COMPILE=aarch64-linux-gnu- CROSS_COMPILE_ARM32=arm-linux-gnueabi- LLVM=1 LLVM_IAS=0"
+          ARGS="ARCH=arm64 \
+                CC=clang \
+                LD=ld.lld \
+                AR=llvm-ar \
+                NM=llvm-nm \
+                OBJCOPY=llvm-objcopy \
+                OBJDUMP=llvm-objdump \
+                STRIP=llvm-strip \
+                CROSS_COMPILE=aarch64-linux-gnu- \
+                CROSS_COMPILE_ARM32=arm-linux-gnueabi- \
+                LLVM=1 \
+                LLVM_IAS=0"
 
           make $ARGS vendor/a23_eur_open_mizkernel_defconfig
           ./scripts/config --enable CONFIG_KSU
           make $ARGS olddefconfig
           
-          # Use -j2 to prevent OOM crash on GitHub's 7GB RAM limit
-          make -j2 $ARGS
+          # With the 4GB swap file, we can safely try -j$(nproc)
+          make -j$(nproc) $ARGS
 
-      - name: 6. Build AnyKernel3
+      - name: 7. Build AnyKernel3
         run: |
           git clone --depth=1 https://github.com/osm0sis/AnyKernel3.git AK3
           cd AK3
           sed -i 's/do.devicecheck=1/do.devicecheck=0/g' anykernel.sh
           sed -i 's!block=.*!block=auto;!g' anykernel.sh
+          # Search for the output image
           find ../kernel/arch/arm64/boot/ -name "Image*" -exec cp {} . \;
           zip -r9 ../MizKernel-A23-KSU-Next.zip *
 
-      - name: 7. Create GitHub Release
+      - name: 8. Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: MizKernel-A235F-${{ github.run_id }}
           name: MizKernel A235F Build ${{ github.run_number }}
+          body: |
+            ### MizKernel for Galaxy A23 (SM-A235F)
+            - **Status**: Successful Build
+            - **KernelSU-Next**: Integrated
+            - **Build ID**: ${{ github.run_id }}
           files: MizKernel-A23-KSU-Next.zip
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
