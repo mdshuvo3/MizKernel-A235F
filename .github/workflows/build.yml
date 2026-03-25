@@ -19,8 +19,7 @@ jobs:
         run: |
           sudo swapoff -a || true
           sudo rm -f /swap_mizkernel
-          # Creating a larger 6GB swap to be absolutely safe
-          sudo dd if=/dev/zero of=/swap_mizkernel bs=1M count=6144
+          sudo dd if=/dev/zero of=/swap_mizkernel bs=1M count=8192
           sudo chmod 600 /swap_mizkernel
           sudo mkswap /swap_mizkernel
           sudo swapon /swap_mizkernel
@@ -28,8 +27,8 @@ jobs:
       - name: 3. Pull Source & Toolchain
         run: |
           git clone --depth=1 https://github.com/${{ github.repository }} kernel
-          mkdir -p toolchain/clang-r416183b
-          git clone --depth=1 https://github.com/kdrag0n/proton-clang.git toolchain/clang-r416183b
+          mkdir -p toolchain
+          git clone --depth=1 https://github.com/kdrag0n/proton-clang.git toolchain/clang
 
       - name: 4. Inject KernelSU-Next
         run: |
@@ -41,65 +40,15 @@ jobs:
       - name: 5. Surgical Code Fixes
         run: |
           cd kernel
-          # Fix 1: Header Prototypes
+          # Fix 1: Header Prototypes (Add 'void' to empty params)
           sed -i 's/void ksu_persistent_allow_list()/void ksu_persistent_allow_list(void)/g' drivers/kernelsu/allowlist.h
           
-          # Fix 2: VFS Hooks (Using a more cautious insertion)
-          # We add the include only if it doesn't exist
+          # Fix 2: VFS Hooks (Include the header after system includes)
           if ! grep -q "kernelsu/allowlist.h" fs/read_write.c; then
-            sed -i '1i #include "../drivers/kernelsu/allowlist.h"' fs/read_write.c
+            sed -i '/#include <linux\/compiler.h>/a #include "../drivers/kernelsu/allowlist.h"' fs/read_write.c
           fi
           
-          # Hook vfs_read/write only if not already hooked
+          # Inject allowlist hooks into vfs_read and vfs_write
           if ! grep -q "ksu_handle_allowlist" fs/read_write.c; then
-             sed -i '/ret = vfs_read(file, buf, count, pos);/a \	ksu_handle_allowlist(file, buf, count, \&ret);' fs/read_write.c
-             sed -i '/ret = vfs_write(file, buf, count, pos);/a \	ksu_handle_allowlist(file, buf, count, \&ret);' fs/read_write.c
-          fi
-
-          # Fix 3: Samsung Techpack Paths
-          find techpack/audio/asoc/codecs/tas256x -name "tas256x-codec.c" -exec sed -i 's|#include "physical_layer/inc/tas256x.h"|#include "../../../physical_layer/inc/tas256x.h"|' {} +
-          sed -i 's|#include "cam_req_mgr_core.h"|#include "../cam_req_mgr/cam_req_mgr_core.h"|' techpack/camera/drivers/cam_utils/cam_trace.h
-
-      - name: 6. Start Compilation
-        run: |
-          cd kernel
-          chmod +x scripts/config
-          export PATH="$GITHUB_WORKSPACE/toolchain/clang-r416183b/bin:$PATH"
-          
-          ARGS="ARCH=arm64 \
-                CC=clang \
-                LD=ld.lld \
-                AR=llvm-ar \
-                NM=llvm-nm \
-                OBJCOPY=llvm-objcopy \
-                OBJDUMP=llvm-objdump \
-                STRIP=llvm-strip \
-                CROSS_COMPILE=aarch64-linux-gnu- \
-                CROSS_COMPILE_ARM32=arm-linux-gnueabi- \
-                LLVM=1 \
-                LLVM_IAS=0"
-
-          make $ARGS vendor/a23_eur_open_mizkernel_defconfig
-          ./scripts/config --enable CONFIG_KSU
-          make $ARGS olddefconfig
-          
-          # Use -j1 to prevent OOM. It is slower but stable.
-          make -j1 $ARGS
-
-      - name: 7. Build AnyKernel3
-        run: |
-          git clone --depth=1 https://github.com/osm0sis/AnyKernel3.git AK3
-          cd AK3
-          sed -i 's/do.devicecheck=1/do.devicecheck=0/g' anykernel.sh
-          sed -i 's!block=.*!block=auto;!g' anykernel.sh
-          find ../kernel/arch/arm64/boot/ -name "Image*" -exec cp {} . \;
-          zip -r9 ../MizKernel-A23-KSU-Next.zip *
-
-      - name: 8. Create GitHub Release
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: MizKernel-A235F-${{ github.run_id }}
-          name: MizKernel A235F Build ${{ github.run_number }}
-          files: MizKernel-A23-KSU-Next.zip
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+             sed -i '/ret = vfs_read(file, buf, count, pos);/a \\tksu_handle_allowlist(file, buf, count, \&ret);' fs/read_write.c
+             sed -i '/ret = vfs_write(file, buf, count, pos);/a \\tksu_handle_allowlist(file, buf,
