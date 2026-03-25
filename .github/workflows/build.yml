@@ -40,15 +40,68 @@ jobs:
       - name: 5. Surgical Code Fixes
         run: |
           cd kernel
-          # Fix 1: Header Prototypes (Add 'void' to empty params)
+          # Fix 1: Header Prototypes
           sed -i 's/void ksu_persistent_allow_list()/void ksu_persistent_allow_list(void)/g' drivers/kernelsu/allowlist.h
           
-          # Fix 2: VFS Hooks (Include the header after system includes)
-          if ! grep -q "kernelsu/allowlist.h" fs/read_write.c; then
-            sed -i '/#include <linux\/compiler.h>/a #include "../drivers/kernelsu/allowlist.h"' fs/read_write.c
-          fi
+          # Fix 2: VFS Hooks (Using absolute-style paths relative to kernel root)
+          # We add the include after the first linux include
+          sed -i '/#include <linux\/compiler.h>/a #include "../drivers/kernelsu/allowlist.h"' fs/read_write.c
           
-          # Inject allowlist hooks into vfs_read and vfs_write
+          # Hook vfs_read/write - Using escaped tabs for valid C syntax
           if ! grep -q "ksu_handle_allowlist" fs/read_write.c; then
              sed -i '/ret = vfs_read(file, buf, count, pos);/a \\tksu_handle_allowlist(file, buf, count, \&ret);' fs/read_write.c
-             sed -i '/ret = vfs_write(file, buf, count, pos);/a \\tksu_handle_allowlist(file, buf,
+             sed -i '/ret = vfs_write(file, buf, count, pos);/a \\tksu_handle_allowlist(file, buf, count, \&ret);' fs/read_write.c
+          fi
+
+          # Fix 3: Samsung Techpack Paths (The robust way)
+          # Instead of relative pathing, we add the include directory to the techpack Makefile
+          TAS_DIR="techpack/audio/asoc/codecs/tas256x"
+          if [ -d "$TAS_DIR" ]; then
+            echo "ccflags-y += -I\$(srctree)/$TAS_DIR/physical_layer/inc" >> $TAS_DIR/Makefile
+            # Revert any previous broken sed attempts on the .c file
+            sed -i 's|#include "../../../physical_layer/inc/tas256x.h"|#include "tas256x.h"|g' $TAS_DIR/os_layer/src/tas256x-codec.c
+          fi
+
+      - name: 6. Start Compilation
+        run: |
+          cd kernel
+          chmod +x scripts/config
+          export PATH="$GITHUB_WORKSPACE/toolchain/clang/bin:$PATH"
+          
+          ARGS="ARCH=arm64 \
+                CC=clang \
+                LD=ld.lld \
+                AR=llvm-ar \
+                NM=llvm-nm \
+                OBJCOPY=llvm-objcopy \
+                OBJDUMP=llvm-objdump \
+                STRIP=llvm-strip \
+                CROSS_COMPILE=aarch64-linux-gnu- \
+                CROSS_COMPILE_ARM32=arm-linux-gnueabi- \
+                LLVM=1 \
+                LLVM_IAS=1"
+
+          make $ARGS vendor/a23_eur_open_mizkernel_defconfig
+          ./scripts/config --enable CONFIG_KSU
+          make $ARGS olddefconfig
+          
+          # Using -j2 to prevent OOM while keeping it faster than -j1
+          make -j2 $ARGS
+
+      - name: 7. Build AnyKernel3
+        run: |
+          git clone --depth=1 https://github.com/osm0sis/AnyKernel3.git AK3
+          cd AK3
+          sed -i 's/do.devicecheck=1/do.devicecheck=0/g' anykernel.sh
+          sed -i 's!block=.*!block=auto;!g' anykernel.sh
+          find ../kernel/arch/arm64/boot/ -name "Image*" -exec cp {} . \;
+          zip -r9 ../MizKernel-A23-KSU-Next.zip *
+
+      - name: 8. Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: MizKernel-A235F-${{ github.run_id }}
+          name: MizKernel A235F Build ${{ github.run_number }}
+          files: MizKernel-A23-KSU-Next.zip
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
