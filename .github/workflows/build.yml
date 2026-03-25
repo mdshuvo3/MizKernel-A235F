@@ -48,9 +48,11 @@ jobs:
             echo 'obj-y += kernelsu/' >> drivers/Makefile
           fi
 
-          # FIX 5: Audio Techpack Header Path Fix (The current error)
-          # We fix the relative path for the tas256x driver
+          # FIX 5: Audio Techpack Header Path Fix
           find techpack/audio/asoc/codecs/tas256x -name "tas256x-codec.c" -exec sed -i 's|#include "physical_layer/inc/tas256x.h"|#include "../../../physical_layer/inc/tas256x.h"|' {} +
+
+          # FIX 6: Camera Techpack Header Path Fix
+          sed -i 's|#include "cam_req_mgr_core.h"|#include "../cam_req_mgr/cam_req_mgr_core.h"|' techpack/camera/drivers/cam_utils/cam_trace.h
 
       - name: 5. Start Compilation
         run: |
@@ -83,7 +85,6 @@ jobs:
           cd AK3
           sed -i 's/do.devicecheck=1/do.devicecheck=0/g' anykernel.sh
           sed -i 's!block=.*!block=auto;!g' anykernel.sh
-          # Check for compressed image first, then standard Image
           if [ -f ../kernel/out/arch/arm64/boot/Image.gz-dtb ]; then
             cp ../kernel/out/arch/arm64/boot/Image.gz-dtb .
           elif [ -f ../kernel/arch/arm64/boot/Image.gz-dtb ]; then
