@@ -1,4 +1,4 @@
-name: MizKernel-A23-KSU-Next
+Name: MizKernel-A23-KSU-Next
 on:
   workflow_dispatch:
 
@@ -38,7 +38,7 @@ jobs:
           mkdir -p kernel/drivers/kernelsu
           rsync -av ksu_src/kernel/ kernel/drivers/kernelsu/
 
-      - name: 5. Surgical Code Fixes
+      - name: 5. Surgical Code Fixes & Integration
         run: |
           cd kernel
           # Fix 1: Header Prototypes
@@ -49,7 +49,6 @@ jobs:
           echo '#include "../drivers/kernelsu/allowlist.h"' | cat - fs/read_write.c > fs/read_write.c.tmp && mv fs/read_write.c.tmp fs/read_write.c
           
           # 2. Inject the hook. We target 'return ret' with or without parentheses/spaces.
-          # We use a placeholder 'HOOK_HERE' then replace it to avoid escaping issues with tabs.
           sed -i 's/return ret;/HOOK_HERE\n\treturn ret;/g' fs/read_write.c
           sed -i 's/return (ret);/HOOK_HERE\n\treturn (ret);/g' fs/read_write.c
           sed -i "s|HOOK_HERE|ksu_handle_allowlist(file, buf, count, \&ret);|g" fs/read_write.c
@@ -57,21 +56,27 @@ jobs:
           # Fix 3: Samsung Techpack Path Robustness
           TAS_CODEC="techpack/audio/asoc/codecs/tas256x/os_layer/src/tas256x-codec.c"
           TAS_MAKEFILE="techpack/audio/asoc/codecs/tas256x/Makefile"
-          
           if [ -f "$TAS_CODEC" ]; then
             sed -i 's|#include "../../../physical_layer/inc/tas256x.h"|#include "tas256x.h"|g' "$TAS_CODEC"
             echo "ccflags-y += -I\$(srctree)/techpack/audio/asoc/codecs/tas256x/physical_layer/inc" >> "$TAS_MAKEFILE"
           fi
 
+          # Fix 4: Final KernelSU Integration
+          # Ensure the driver is actually linked in the build
+          if ! grep -q "kernelsu" drivers/Makefile; then
+            echo "obj-y += kernelsu/" >> drivers/Makefile
+          fi
+
       - name: 6. Verify Fixes & Start Compilation
         run: |
           cd kernel
-          # Debug: Print the lines around where we expect the hook to be
-          grep -C 2 "ksu_handle_allowlist" fs/read_write.c || (echo "VFS Hook Injection Failed again!" && exit 1)
+          # [span_3](start_span)Check hook injection[span_3](end_span)
+          grep -C 2 "ksu_handle_allowlist" fs/read_write.c || (echo "VFS Hook Injection Failed!" && exit 1)
           
           chmod +x scripts/config
           export PATH="$GITHUB_WORKSPACE/toolchain/clang/bin:$PATH"
           
+          # [span_4](start_span)[span_5](start_span)Added KCFLAGS to include kernelsu headers[span_4](end_span)[span_5](end_span)
           ARGS="ARCH=arm64 \
                 CC=clang \
                 LD=ld.lld \
@@ -83,13 +88,17 @@ jobs:
                 CROSS_COMPILE=aarch64-linux-gnu- \
                 CROSS_COMPILE_ARM32=arm-linux-gnueabi- \
                 LLVM=1 \
-                LLVM_IAS=1"
+                LLVM_IAS=1 \
+                KCFLAGS=-I$GITHUB_WORKSPACE/kernel/drivers/kernelsu"
 
           make $ARGS vendor/a23_eur_open_mizkernel_defconfig
           ./scripts/config --enable CONFIG_KSU
+          # [span_6](start_span)Optional: Disable ARM64 Crypto if aes-ce.o continues to fail[span_6](end_span)
+          ./scripts/config --disable CONFIG_CRYPTO_AES_ARM64_CE_BLK
+          
           make $ARGS olddefconfig
           
-          # j2 to keep RAM usage stable
+          # [span_7](start_span)Using j2 for RAM stability as per your logs[span_7](end_span)
           make -j2 $ARGS
 
       - name: 7. Build AnyKernel3
