@@ -2,6 +2,9 @@ name: MizKernel-A23-KSU-Next
 on:
   workflow_dispatch:
 
+permissions:
+  contents: write
+
 jobs:
   build:
     runs-on: ubuntu-22.04
@@ -28,85 +31,42 @@ jobs:
       - name: 4. Surgical Code Fixes
         run: |
           cd kernel
-          
-          # FIX 1: Strict Prototypes Error
           sed -i 's/void ksu_persistent_allow_list()/void ksu_persistent_allow_list(void)/g' drivers/kernelsu/allowlist.h
-          
-          # FIX 2: VFS Hooks in read_write.c (Fixed Paths and Variable Access)
-          # Add include using full relative path from fs/ to drivers/
-          sed -i '1i #include "../drivers/kernelsu/allowlist.h"' fs/read_write.c
-          
-          # Inject hooks immediately AFTER the return value (ret) is populated
+          sed -i '1i #include "drivers/kernelsu/allowlist.h"' fs/read_write.c
           sed -i '/ret = vfs_read(file, buf, count, pos);/a \	ksu_handle_allowlist(file, buf, count, &ret);' fs/read_write.c
           sed -i '/ret = vfs_write(file, buf, count, pos);/a \	ksu_handle_allowlist(file, buf, count, &ret);' fs/read_write.c
-
-          # FIX 3: KernelSU Symbol Conflicts
-          find drivers/kernelsu -name "*.c" -exec sed -i 's/vfs_stat(/ksu_vfs_stat(/g' {} +
-          find drivers/kernelsu -name "*.c" -exec sed -i 's/vfs_fstatat(/ksu_vfs_fstatat(/g' {} +
-
-          # FIX 4: Build System Integration
-          if ! grep -q "kernelsu/Kconfig" drivers/Kconfig; then
-            sed -i '/endmenu/i source "drivers/kernelsu/Kconfig"' drivers/Kconfig
-          fi
-          if ! grep -q "kernelsu/" drivers/Makefile; then
-            echo 'obj-y += kernelsu/' >> drivers/Makefile
-          fi
-
-          # FIX 5: Techpack Header Path Fixes (Samsung specific)
           find techpack/audio/asoc/codecs/tas256x -name "tas256x-codec.c" -exec sed -i 's|#include "physical_layer/inc/tas256x.h"|#include "../../../physical_layer/inc/tas256x.h"|' {} +
           sed -i 's|#include "cam_req_mgr_core.h"|#include "../cam_req_mgr/cam_req_mgr_core.h"|' techpack/camera/drivers/cam_utils/cam_trace.h
 
       - name: 5. Start Compilation
         run: |
           cd kernel
-          # Fix Permissions for scripts
           chmod +x scripts/config
-          
           export PATH="$GITHUB_WORKSPACE/toolchain/clang-r416183b/bin:$PATH"
           
-          ARGS="ARCH=arm64 \
-                CC=clang \
-                LD=ld.lld \
-                AR=llvm-ar \
-                NM=llvm-nm \
-                OBJCOPY=llvm-objcopy \
-                OBJDUMP=llvm-objdump \
-                STRIP=llvm-strip \
-                CROSS_COMPILE=aarch64-linux-gnu- \
-                CROSS_COMPILE_ARM32=arm-linux-gnueabi- \
-                LLVM=1 \
-                LLVM_IAS=0"
+          ARGS="ARCH=arm64 CC=clang LD=ld.lld AR=llvm-ar NM=llvm-nm OBJCOPY=llvm-objcopy OBJDUMP=llvm-objdump STRIP=llvm-strip CROSS_COMPILE=aarch64-linux-gnu- CROSS_COMPILE_ARM32=arm-linux-gnueabi- LLVM=1 LLVM_IAS=0"
 
-          # 1. Generate default config
           make $ARGS vendor/a23_eur_open_mizkernel_defconfig
-          
-          # 2. Enable KernelSU in .config
           ./scripts/config --enable CONFIG_KSU
-          
-          # 3. Process new dependencies
           make $ARGS olddefconfig
           
-          # 4. Build kernel
-          make -j$(nproc) $ARGS
+          # Use -j2 to prevent OOM crash on GitHub's 7GB RAM limit
+          make -j2 $ARGS
 
-      - name: 6. Build AnyKernel3 Flashable Zip
+      - name: 6. Build AnyKernel3
         run: |
           git clone --depth=1 https://github.com/osm0sis/AnyKernel3.git AK3
           cd AK3
           sed -i 's/do.devicecheck=1/do.devicecheck=0/g' anykernel.sh
           sed -i 's!block=.*!block=auto;!g' anykernel.sh
-          
-          # Copy the compiled image (check both standard and dtb locations)
-          if [ -f ../kernel/arch/arm64/boot/Image.gz-dtb ]; then
-            cp ../kernel/arch/arm64/boot/Image.gz-dtb .
-          elif [ -f ../kernel/arch/arm64/boot/Image ]; then
-            cp ../kernel/arch/arm64/boot/Image .
-          fi
-          
+          find ../kernel/arch/arm64/boot/ -name "Image*" -exec cp {} . \;
           zip -r9 ../MizKernel-A23-KSU-Next.zip *
 
-      - name: 7. Upload Artifact
-        uses: actions/upload-artifact@v4
+      - name: 7. Create GitHub Release
+        uses: softprops/action-gh-release@v2
         with:
-          name: MizKernel-Build
-          path: MizKernel-A23-KSU-Next.zip
+          tag_name: MizKernel-A235F-${{ github.run_id }}
+          name: MizKernel A235F Build ${{ github.run_number }}
+          files: MizKernel-A23-KSU-Next.zip
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
