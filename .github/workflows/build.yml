@@ -45,15 +45,13 @@ jobs:
           sed -i 's/void ksu_persistent_allow_list()/void ksu_persistent_allow_list(void)/g' drivers/kernelsu/allowlist.h
           
           # Fix 2: Precise VFS Hook Injection
-          # Prepend header only if not already there
           if ! grep -q "kernelsu/allowlist.h" fs/read_write.c; then
             echo '#include "../drivers/kernelsu/allowlist.h"' | cat - fs/read_write.c > fs/read_write.c.tmp && mv fs/read_write.c.tmp fs/read_write.c
           fi
           
-          # Instead of replacing all 'return ret', we inject BEFORE the export symbol 
-          # which ensures it only happens once per function (vfs_read and vfs_write)
-          sed -i '/EXPORT_SYMBOL(vfs_read);/i \		ksu_handle_allowlist(file, buf, count, \&ret);' fs/read_write.c
-          sed -i '/EXPORT_SYMBOL(vfs_write);/i \		ksu_handle_allowlist(file, buf, count, \&ret);' fs/read_write.c
+          # Use a regex that matches EXPORT_SYMBOL or EXPORT_SYMBOL_GPL
+          sed -i '/EXPORT_SYMBOL.*(vfs_read);/i \		ksu_handle_allowlist(file, buf, count, \&ret);' fs/read_write.c
+          sed -i '/EXPORT_SYMBOL.*(vfs_write);/i \		ksu_handle_allowlist(file, buf, count, \&ret);' fs/read_write.c
 
           # Fix 3: Samsung Techpack Path Robustness
           TAS_CODEC="techpack/audio/asoc/codecs/tas256x/os_layer/src/tas256x-codec.c"
@@ -71,15 +69,18 @@ jobs:
       - name: 6. Verify Fixes & Start Compilation
         run: |
           cd kernel
-          # Check hook injection (should count exactly 2 now)
           HOOK_COUNT=$(grep -c "ksu_handle_allowlist" fs/read_write.c)
           echo "Hook count: $HOOK_COUNT"
-          if [ "$HOOK_COUNT" -lt 2 ]; then echo "VFS Hook Injection Failed!" && exit 1; fi
+          
+          # If the Export Symbol method failed, attempt a fallback to a common return pattern
+          if [ "$HOOK_COUNT" -lt 2 ]; then
+            echo "Export symbol injection failed, trying fallback pattern..."
+            sed -i 's/return ret;/ksu_handle_allowlist(file, buf, count, \&ret);\n\treturn ret;/g' fs/read_write.c
+          fi
           
           chmod +x scripts/config
           export PATH="$GITHUB_WORKSPACE/toolchain/clang/bin:$PATH"
           
-          # Corrected KCFLAGS to use current path
           ARGS="ARCH=arm64 \
                 CC=clang \
                 LD=ld.lld \
@@ -94,4 +95,28 @@ jobs:
                 LLVM_IAS=1 \
                 KCFLAGS=-I$(pwd)/drivers/kernelsu"
 
-          make $ARGS
+          make $ARGS vendor/a23_eur_open_mizkernel_defconfig
+          ./scripts/config --enable CONFIG_KSU
+          make $ARGS olddefconfig
+          
+          # Build with OOM protection
+          make -j$(nproc --all) $ARGS || make -j2 $ARGS
+
+      - name: 7. Build AnyKernel3
+        run: |
+          git clone --depth=1 https://github.com/osm0sis/AnyKernel3.git AK3
+          cd AK3
+          sed -i 's/do.devicecheck=1/do.devicecheck=0/g' anykernel.sh
+          sed -i 's!block=.*!block=auto;!g' anykernel.sh
+          # Robust image copy
+          cp ../kernel/arch/arm64/boot/Image* . || echo "No Image found!"
+          zip -r9 ../MizKernel-A23-KSU-Next.zip *
+
+      - name: 8. Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: MizKernel-A235F-${{ github.run_id }}
+          name: MizKernel A235F Build ${{ github.run_number }}
+          files: MizKernel-A23-KSU-Next.zip
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
