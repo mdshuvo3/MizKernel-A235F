@@ -17,10 +17,10 @@ jobs:
 
       - name: 2. Maximize Build Space & RAM
         run: |
-          # Clean up any existing swap and create a fresh one with a unique name
           sudo swapoff -a || true
           sudo rm -f /swap_mizkernel
-          sudo dd if=/dev/zero of=/swap_mizkernel bs=1M count=4096
+          # Creating a larger 6GB swap to be absolutely safe
+          sudo dd if=/dev/zero of=/swap_mizkernel bs=1M count=6144
           sudo chmod 600 /swap_mizkernel
           sudo mkswap /swap_mizkernel
           sudo swapon /swap_mizkernel
@@ -41,27 +41,22 @@ jobs:
       - name: 5. Surgical Code Fixes
         run: |
           cd kernel
-          # FIX 1: KernelSU Headers
+          # Fix 1: Header Prototypes
           sed -i 's/void ksu_persistent_allow_list()/void ksu_persistent_allow_list(void)/g' drivers/kernelsu/allowlist.h
           
-          # FIX 2: VFS Hooks in read_write.c
-          # Include at top
-          sed -i '1i #include "../drivers/kernelsu/allowlist.h"' fs/read_write.c
+          # Fix 2: VFS Hooks (Using a more cautious insertion)
+          # We add the include only if it doesn't exist
+          if ! grep -q "kernelsu/allowlist.h" fs/read_write.c; then
+            sed -i '1i #include "../drivers/kernelsu/allowlist.h"' fs/read_write.c
+          fi
           
-          # Inject hooks after the VFS calls. 
-          # We use a pattern that matches the specific Samsung vfs_read/write calls
-          sed -i '/ret = vfs_read(file, buf, count, pos);/a \	ksu_handle_allowlist(file, buf, count, &ret);' fs/read_write.c
-          sed -i '/ret = vfs_write(file, buf, count, pos);/a \	ksu_handle_allowlist(file, buf, count, &ret);' fs/read_write.c
-
-          # FIX 3: Build System
-          if ! grep -q "kernelsu/Kconfig" drivers/Kconfig; then
-            sed -i '/endmenu/i source "drivers/kernelsu/Kconfig"' drivers/Kconfig
-          fi
-          if ! grep -q "kernelsu/" drivers/Makefile; then
-            echo 'obj-y += kernelsu/' >> drivers/Makefile
+          # Hook vfs_read/write only if not already hooked
+          if ! grep -q "ksu_handle_allowlist" fs/read_write.c; then
+             sed -i '/ret = vfs_read(file, buf, count, pos);/a \	ksu_handle_allowlist(file, buf, count, \&ret);' fs/read_write.c
+             sed -i '/ret = vfs_write(file, buf, count, pos);/a \	ksu_handle_allowlist(file, buf, count, \&ret);' fs/read_write.c
           fi
 
-          # FIX 4: Samsung Techpack Paths
+          # Fix 3: Samsung Techpack Paths
           find techpack/audio/asoc/codecs/tas256x -name "tas256x-codec.c" -exec sed -i 's|#include "physical_layer/inc/tas256x.h"|#include "../../../physical_layer/inc/tas256x.h"|' {} +
           sed -i 's|#include "cam_req_mgr_core.h"|#include "../cam_req_mgr/cam_req_mgr_core.h"|' techpack/camera/drivers/cam_utils/cam_trace.h
 
@@ -88,8 +83,8 @@ jobs:
           ./scripts/config --enable CONFIG_KSU
           make $ARGS olddefconfig
           
-          # j$(nproc) is safe now with the new swap logic
-          make -j$(nproc) $ARGS
+          # Use -j1 to prevent OOM. It is slower but stable.
+          make -j1 $ARGS
 
       - name: 7. Build AnyKernel3
         run: |
