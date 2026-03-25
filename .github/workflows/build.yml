@@ -32,9 +32,13 @@ jobs:
           # FIX 1: Strict Prototypes Error
           sed -i 's/void ksu_persistent_allow_list()/void ksu_persistent_allow_list(void)/g' drivers/kernelsu/allowlist.h
           
-          # FIX 2: VFS Hooks in read_write.c
-          sed -i '/ssize_t vfs_read(struct file/i #include "../drivers/kernelsu/allowlist.h"' fs/read_write.c
-          sed -i '/if (unlikely(ret >= 0))/i \	ksu_handle_allowlist(file, buf, count, &ret);' fs/read_write.c
+          # FIX 2: VFS Hooks in read_write.c (Improved Pathing and Placement)
+          # Add include to the top of the file to avoid "file not found"
+          sed -i '1i #include "../drivers/kernelsu/allowlist.h"' fs/read_write.c
+          
+          # Insert hook AFTER 'ret' is assigned in vfs_read and vfs_write
+          sed -i '/ret = vfs_read(file, buf, count, pos);/a \	ksu_handle_allowlist(file, buf, count, &ret);' fs/read_write.c
+          sed -i '/ret = vfs_write(file, buf, count, pos);/a \	ksu_handle_allowlist(file, buf, count, &ret);' fs/read_write.c
 
           # FIX 3: KernelSU Symbol Conflicts
           find drivers/kernelsu -name "*.c" -exec sed -i 's/vfs_stat(/ksu_vfs_stat(/g' {} +
@@ -48,16 +52,16 @@ jobs:
             echo 'obj-y += kernelsu/' >> drivers/Makefile
           fi
 
-          # FIX 5: Audio Techpack Header Path Fix
+          # FIX 5: Audio & Camera Techpack Header Path Fixes
           find techpack/audio/asoc/codecs/tas256x -name "tas256x-codec.c" -exec sed -i 's|#include "physical_layer/inc/tas256x.h"|#include "../../../physical_layer/inc/tas256x.h"|' {} +
-
-          # FIX 6: Camera Techpack Header Path Fix
           sed -i 's|#include "cam_req_mgr_core.h"|#include "../cam_req_mgr/cam_req_mgr_core.h"|' techpack/camera/drivers/cam_utils/cam_trace.h
 
       - name: 5. Start Compilation
         run: |
           cd kernel
-          export PATH="$GITHUB_WORKSPACE/toolchain/clang-r416183b/bin:$PATH"
+          # Use the full path to the downloaded toolchain for all tools
+          CLANG_BIN="$GITHUB_WORKSPACE/toolchain/clang-r416183b/bin"
+          export PATH="$CLANG_BIN:$PATH"
           
           ARGS="ARCH=arm64 \
                 CC=clang \
@@ -73,7 +77,9 @@ jobs:
                 LLVM_IAS=0"
 
           make $ARGS vendor/a23_eur_open_mizkernel_defconfig
-          echo "CONFIG_KSU=y" >> .config
+          
+          # Force KernelSU Config
+          scripts/config --enable CONFIG_KSU
           make $ARGS olddefconfig
           
           # Parallel build
@@ -85,12 +91,11 @@ jobs:
           cd AK3
           sed -i 's/do.devicecheck=1/do.devicecheck=0/g' anykernel.sh
           sed -i 's!block=.*!block=auto;!g' anykernel.sh
-          if [ -f ../kernel/out/arch/arm64/boot/Image.gz-dtb ]; then
-            cp ../kernel/out/arch/arm64/boot/Image.gz-dtb .
-          elif [ -f ../kernel/arch/arm64/boot/Image.gz-dtb ]; then
+          # Check for the correct output binary path
+          if [ -f ../kernel/arch/arm64/boot/Image.gz-dtb ]; then
             cp ../kernel/arch/arm64/boot/Image.gz-dtb .
-          else
-            cp ../kernel/arch/arm64/boot/Image . || true
+          elif [ -f ../kernel/arch/arm64/boot/Image ]; then
+            cp ../kernel/arch/arm64/boot/Image .
           fi
           zip -r9 ../MizKernel-A23-KSU-Next.zip *
 
