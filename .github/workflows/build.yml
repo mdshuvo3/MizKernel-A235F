@@ -19,7 +19,6 @@ jobs:
         run: |
           sudo swapoff -a || true
           sudo rm -f /swap_mizkernel
-          # Creating a 16GB swap file to assist the 7GB RAM runner
           sudo dd if=/dev/zero of=/swap_mizkernel bs=1M count=16384
           sudo chmod 600 /swap_mizkernel
           sudo mkswap /swap_mizkernel
@@ -68,29 +67,29 @@ jobs:
           cd kernel
           export PATH="$GITHUB_WORKSPACE/toolchain/clang/bin:$PATH"
           
-          # Use LLVM_IAS=0 to bypass assembly errors in old crypto drivers
+          # Explicitly defining toolchain components for better compatibility with 4.19
           export MAKE_ARGS="ARCH=arm64 \
-                CC=clang \
+                REAL_CC=clang \
+                CLANG_TRIPLE=aarch64-linux-gnu- \
+                CROSS_COMPILE=aarch64-linux-gnu- \
+                CROSS_COMPILE_ARM32=arm-linux-gnueabi- \
                 LD=ld.lld \
                 AR=llvm-ar \
                 NM=llvm-nm \
                 OBJCOPY=llvm-objcopy \
                 OBJDUMP=llvm-objdump \
-                STRIP=llvm-strip \
-                CROSS_COMPILE=aarch64-linux-gnu- \
-                CROSS_COMPILE_ARM32=arm-linux-gnueabi- \
-                CLANG_TRIPLE=aarch64-linux-gnu- \
-                LLVM=1 \
-                LLVM_IAS=0"
+                STRIP=llvm-strip"
 
-          make $MAKE_ARGS vendor/a23_eur_open_mizkernel_defconfig
+          # Use Clang specifically for the config step
+          make CC=clang $MAKE_ARGS vendor/a23_eur_open_mizkernel_defconfig
           
+          # Enable KSU
           ./scripts/config --enable CONFIG_KSU
           ./scripts/config --enable CONFIG_KSU_NEXT
-          make $MAKE_ARGS olddefconfig
+          make CC=clang $MAKE_ARGS olddefconfig
           
-          # Using -j3 to prevent the 'Killed' (OOM) error encountered in the logs
-          make -j3 $MAKE_ARGS
+          # Build with specified CC to ensure clang is used throughout
+          make -j$(nproc) CC=clang $MAKE_ARGS
 
       - name: 7. build anykernel3
         run: |
