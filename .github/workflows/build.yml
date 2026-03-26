@@ -77,9 +77,12 @@ jobs:
           # Generate config
           make O=out vendor/a23_eur_open_mizkernel_defconfig CC=clang
           
+          # FIX: Grant execution permission to the config script
+          chmod +x scripts/config
+          
           # Enable KSU
-          scripts/config --file out/.config --enable CONFIG_KSU
-          scripts/config --file out/.config --enable CONFIG_KSU_NEXT
+          ./scripts/config --file out/.config --enable CONFIG_KSU
+          ./scripts/config --file out/.config --enable CONFIG_KSU_NEXT
           
           # Build the kernel
           make -j$(nproc) O=out \
