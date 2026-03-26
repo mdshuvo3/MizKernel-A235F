@@ -1,4 +1,4 @@
-name: MizKernel-A23-KSU-Next
+Name: MizKernel-A23-KSU-Next
 on:
   workflow_dispatch:
 
@@ -37,9 +37,15 @@ jobs:
           rm -rf kernel/drivers/kernelsu
           mkdir -p kernel/drivers/kernelsu
           cp -r ksu_src/kernel/* kernel/drivers/kernelsu/
+          
           # Initialize git in kernelsu dir to provide KSU_GIT_VERSION
           cd kernel/drivers/kernelsu
-          git init && git add . && git commit -m "init ksu"
+          git init
+          # Set temporary git identity to allow the commit to succeed
+          git config user.email "bot@github.com"
+          git config user.name "Kernel Bot"
+          git add .
+          git commit -m "init ksu"
           cd ../../../
           rm -rf ksu_src
 
@@ -82,7 +88,7 @@ jobs:
           chmod +x scripts/config
           export PATH="$GITHUB_WORKSPACE/toolchain/clang/bin:$PATH"
           
-          # Fixed KCFLAGS quote and added CLANG_TRIPLE
+          # Set build arguments with absolute path for KCFLAGS
           export ARGS="ARCH=arm64 \
                 CC=clang \
                 LD=ld.lld \
@@ -96,7 +102,7 @@ jobs:
                 CLANG_TRIPLE=aarch64-linux-gnu- \
                 LLVM=1 \
                 LLVM_IAS=1 \
-                KCFLAGS=-I$(pwd)/drivers/kernelsu"
+                KCFLAGS=-I$GITHUB_WORKSPACE/kernel/drivers/kernelsu"
 
           make $ARGS vendor/a23_eur_open_mizkernel_defconfig
           ./scripts/config --enable CONFIG_KSU
@@ -122,7 +128,4 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: MizKernel-A235F-${{ github.run_id }}
-          name: MizKernel A235F Build ${{ github.run_number }}
-          files: MizKernel-A23-KSU-Next.zip
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          name: MizKernel A
