@@ -36,7 +36,8 @@ jobs:
           git clone --depth=1 https://github.com/rifsxd/KernelSU-Next ksu_src
           rm -rf kernel/drivers/kernelsu
           mkdir -p kernel/drivers/kernelsu
-          rsync -av ksu_src/kernel/ kernel/drivers/kernelsu/
+          cp -r ksu_src/kernel/* kernel/drivers/kernelsu/
+          rm -rf ksu_src
 
       - name: 5. Surgical Code Fixes
         run: |
@@ -46,4 +47,78 @@ jobs:
           
           # Fix 2: Precise VFS Hook Injection
           if ! grep -q "kernelsu/allowlist.h" fs/read_write.c; then
-            sed -i
+            sed -i '1i #include "../drivers/kernelsu/allowlist.h"' fs/read_write.c
+          fi
+          
+          # Inject hooks before return ret; in vfs_read and vfs_write
+          sed -i '/ssize_t vfs_read/,/return ret;/ s/return ret;/ksu_handle_allowlist(file, buf, count, \&ret);\n\treturn ret;/' fs/read_write.c
+          sed -i '/ssize_t vfs_write/,/return ret;/ s/return ret;/ksu_handle_allowlist(file, buf, count, \&ret);\n\treturn ret;/' fs/read_write.c
+
+          # Fix 3: Samsung Techpack Path Robustness
+          TAS_MAKEFILE="techpack/audio/asoc/codecs/tas256x/Makefile"
+          if [ -f "$TAS_MAKEFILE" ]; then
+            echo "ccflags-y += -I\$(srctree)/techpack/audio/asoc/codecs/tas256x/physical_layer/inc" >> "$TAS_MAKEFILE"
+          fi
+
+          # Fix 4: Link KernelSU into the driver tree
+          if ! grep -q "kernelsu" drivers/Makefile; then
+            echo "obj-y += kernelsu/" >> drivers/Makefile
+          fi
+
+      - name: 6. Verify Fixes & Start Compilation
+        run: |
+          cd kernel
+          HOOK_COUNT=$(grep -c "ksu_handle_allowlist" fs/read_write.c)
+          echo "Hook count verified: $HOOK_COUNT"
+          
+          if [ "$HOOK_COUNT" -lt 2 ]; then
+            echo "Error: VFS Hooks not found in fs/read_write.c"
+            exit 1
+          fi
+          
+          chmod +x scripts/config
+          export PATH="$GITHUB_WORKSPACE/toolchain/clang/bin:$PATH"
+          
+          export ARGS="ARCH=arm64 \
+                CC=clang \
+                LD=ld.lld \
+                AR=llvm-ar \
+                NM=llvm-nm \
+                OBJCOPY=llvm-objcopy \
+                OBJDUMP=llvm-objdump \
+                STRIP=llvm-strip \
+                CROSS_COMPILE=aarch64-linux-gnu- \
+                CROSS_COMPILE_ARM32=arm-linux-gnueabi- \
+                CLANG_TRIPLE=aarch64-linux-gnu- \
+                LLVM=1 \
+                LLVM_IAS=1 \
+                KCFLAGS=-I$(pwd)/drivers/kernelsu"
+
+          make $ARGS vendor/a23_eur_open_mizkernel_defconfig
+          ./scripts/config --enable CONFIG_KSU
+          make $ARGS olddefconfig
+          
+          # Reduced parallelism to prevent memory-related job cancellation
+          make -j2 $ARGS
+
+      - name: 7. Build AnyKernel3
+        run: |
+          git clone --depth=1 https://github.com/osm0sis/AnyKernel3.git AK3
+          cd AK3
+          sed -i 's/do.devicecheck=1/do.devicecheck=0/g' anykernel.sh
+          sed -i 's!block=.*!block=auto;!g' anykernel.sh
+          if [ -f ../kernel/arch/arm64/boot/Image.gz ]; then
+            cp ../kernel/arch/arm64/boot/Image.gz .
+          else
+            cp ../kernel/arch/arm64/boot/Image .
+          fi
+          zip -r9 ../MizKernel-A23-KSU-Next.zip *
+
+      - name: 8. Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: MizKernel-A235F-${{ github.run_id }}
+          name: MizKernel A235F Build ${{ github.run_number }}
+          files: MizKernel-A23-KSU-Next.zip
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
