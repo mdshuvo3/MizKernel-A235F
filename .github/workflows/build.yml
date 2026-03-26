@@ -19,6 +19,7 @@ jobs:
         run: |
           sudo swapoff -a || true
           sudo rm -f /swap_mizkernel
+          # Creating a 16GB swap file to assist the 7GB RAM runner
           sudo dd if=/dev/zero of=/swap_mizkernel bs=1M count=16384
           sudo chmod 600 /swap_mizkernel
           sudo mkswap /swap_mizkernel
@@ -44,20 +45,19 @@ jobs:
       - name: 5. surgical code fixes
         run: |
           cd kernel
-          # [span_0](start_span)Fix allowlist header to prevent static conflicts[span_0](end_span)
+          # Fix Kernelsu-Next allowlist headers
           sed -i 's/static void ksu_handle_allowlist/void ksu_handle_allowlist/g' drivers/kernelsu/allowlist.h 2>/dev/null || true
           sed -i 's/void ksu_persistent_allow_list()/void ksu_persistent_allow_list(void)/g' drivers/kernelsu/allowlist.h
           
-          # [span_1](start_span)Add include after standard linux headers[span_1](end_span)
+          # Inject hooks into VFS
           if ! grep -q "kernelsu/allowlist.h" fs/read_write.c; then
             sed -i '/#include <linux\/slab.h>/a #include "../drivers/kernelsu/allowlist.h"' fs/read_write.c
           fi
           
-          # [span_2](start_span)Inject hooks into vfs_read and vfs_write[span_2](end_span)
           sed -i '/ssize_t vfs_read/,/return ret;/ s/return ret;/ksu_handle_allowlist(file, buf, count, \&ret);\n\treturn ret;/' fs/read_write.c
           sed -i '/ssize_t vfs_write/,/return ret;/ s/return ret;/ksu_handle_allowlist(file, buf, count, \&ret);\n\treturn ret;/' fs/read_write.c
 
-          # Fix audio driver include paths
+          # Audio driver path fix
           tas_makefile="techpack/audio/asoc/codecs/tas256x/makefile"
           if [ -f "$tas_makefile" ]; then
             echo "ccflags-y += -I\$(srctree)/techpack/audio/asoc/codecs/tas256x/physical_layer/inc" >> "$tas_makefile"
@@ -68,8 +68,7 @@ jobs:
           cd kernel
           export PATH="$GITHUB_WORKSPACE/toolchain/clang/bin:$PATH"
           
-          # Compilation Arguments
-          # [span_3](start_span)LLVM_IAS is set to 0 to fix 'literal value out of range' errors in crypto assembly[span_3](end_span)
+          # Use LLVM_IAS=0 to bypass assembly errors in old crypto drivers
           export MAKE_ARGS="ARCH=arm64 \
                 CC=clang \
                 LD=ld.lld \
@@ -86,13 +85,12 @@ jobs:
 
           make $MAKE_ARGS vendor/a23_eur_open_mizkernel_defconfig
           
-          # Enable KSU
           ./scripts/config --enable CONFIG_KSU
           ./scripts/config --enable CONFIG_KSU_NEXT
           make $MAKE_ARGS olddefconfig
           
-          # [span_4](start_span)Build - using lower job count to stabilize RAM[span_4](end_span)
-          make -j$(nproc --all) $MAKE_ARGS
+          # Using -j3 to prevent the 'Killed' (OOM) error encountered in the logs
+          make -j3 $MAKE_ARGS
 
       - name: 7. build anykernel3
         run: |
