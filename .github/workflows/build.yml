@@ -1,4 +1,4 @@
-name: MizKernel-A23-KSU-Next
+name: mizkernel-a23-ksu-next
 on:
   workflow_dispatch:
 
@@ -9,13 +9,13 @@ jobs:
   build:
     runs-on: ubuntu-22.04
     steps:
-      - name: 1. Environment Setup
+      - name: 1. environment setup
         run: |
           sudo apt-get update
           sudo apt-get install -y bc bison build-essential ccache curl flex g++-multilib gcc-multilib git gnupg gperf libelf-dev liblz4-tool libncurses-dev libsdl1.2-dev libssl-dev libxml2 libxml2-utils rsync squashfs-tools xsltproc zip zlib1g-dev python3 binutils-aarch64-linux-gnu device-tree-compiler
           sudo ln -sf /usr/bin/python3 /usr/bin/python
 
-      - name: 2. Maximize Build Space & RAM
+      - name: 2. maximize build space & ram
         run: |
           sudo swapoff -a || true
           sudo rm -f /swap_mizkernel
@@ -26,7 +26,7 @@ jobs:
           sudo swapon /swap_mizkernel
           free -h
 
-      - name: 3. Pull Source & Toolchain
+      - name: 3. pull source & toolchain
         run: |
           git clone --depth=1 https://github.com/${{ github.repository }} kernel
           mkdir -p toolchain
@@ -34,7 +34,7 @@ jobs:
           # Crucial: Remove heavy metadata
           rm -rf kernel/.git toolchain/clang/.git
 
-      - name: 4. Inject KernelSU-Next
+      - name: 4. inject kernelsu-next
         run: |
           git clone --depth=1 https://github.com/rifsxd/KernelSU-Next ksu_src
           rm -rf kernel/drivers/kernelsu
@@ -45,13 +45,13 @@ jobs:
           cd kernel/drivers/kernelsu
           git init
           git config user.email "bot@github.com"
-          git config user.name "Kernel Bot"
+          git config user.name "kernel bot"
           git add .
           git commit -m "init ksu"
           cd ../../../
           rm -rf ksu_src
 
-      - name: 5. Surgical Code Fixes
+      - name: 5. surgical code fixes
         run: |
           cd kernel
           sed -i 's/void ksu_persistent_allow_list()/void ksu_persistent_allow_list(void)/g' drivers/kernelsu/allowlist.h
@@ -72,13 +72,13 @@ jobs:
             echo "obj-y += kernelsu/" >> drivers/Makefile
           fi
 
-      - name: 6. Verify & Compile (Safe Mode)
+      - name: 6. verify & compile
         run: |
           cd kernel
           chmod +x scripts/config
           export PATH="$GITHUB_WORKSPACE/toolchain/clang/bin:$PATH"
           
-          # Added --thinlto-cache-dir and memory-saving LD flags
+          # Optimization: Use all available cores for parallel compilation
           export ARGS="ARCH=arm64 \
                 CC=clang \
                 LD=ld.lld \
@@ -92,31 +92,37 @@ jobs:
                 CLANG_TRIPLE=aarch64-linux-gnu- \
                 LLVM=1 \
                 LLVM_IAS=1 \
-                KCFLAGS=-I$GITHUB_WORKSPACE/kernel/drivers/kernelsu \
-                LDFLAGS=--threads=1"
+                KCFLAGS=-I$GITHUB_WORKSPACE/kernel/drivers/kernelsu"
 
           make $ARGS vendor/a23_eur_open_mizkernel_defconfig
           ./scripts/config --enable CONFIG_KSU
+          ./scripts/config --enable CONFIG_KSU_NEXT
           make $ARGS olddefconfig
           
-          # Force -j1 to prevent crashing the runner
-          make -j1 $ARGS
+          # Build with multi-threading
+          make -j$(nproc --all) $ARGS
 
-      - name: 7. Build AnyKernel3
+      - name: 7. build anykernel3
         run: |
-          git clone --depth=1 https://github.com/osm0sis/AnyKernel3.git AK3
-          cd AK3
+          git clone --depth=1 https://github.com/osm0sis/AnyKernel3.git ak3
+          cd ak3
           sed -i 's/do.devicecheck=1/do.devicecheck=0/g' anykernel.sh
           sed -i 's!block=.*!block=auto;!g' anykernel.sh
-          # Check for both possible Image formats
-          [ -f ../kernel/arch/arm64/boot/Image.gz ] && cp ../kernel/arch/arm64/boot/Image.gz . || cp ../kernel/arch/arm64/boot/Image .
-          zip -r9 ../MizKernel-A23-KSU-Next.zip *
+          
+          # Check for image and package as lowercase
+          if [ -f ../kernel/arch/arm64/boot/Image.gz ]; then
+            cp ../kernel/arch/arm64/boot/Image.gz .
+          else
+            cp ../kernel/arch/arm64/boot/Image .
+          fi
+          
+          zip -r9 ../mizkernel-a23-ksu-next.zip *
 
-      - name: 8. Create GitHub Release
+      - name: 8. create github release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: MizKernel-A235F-${{ github.run_id }}
-          name: MizKernel A235F Build ${{ github.run_number }}
-          files: MizKernel-A23-KSU-Next.zip
+          tag_name: mizkernel-a235f-${{ github.run_id }}
+          name: mizkernel a235f build ${{ github.run_number }}
+          files: mizkernel-a23-ksu-next.zip
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
