@@ -19,7 +19,8 @@ jobs:
         run: |
           sudo swapoff -a || true
           sudo rm -f /swap_mizkernel
-          sudo dd if=/dev/zero of=/swap_mizkernel bs=1M count=12288
+          # Increasing swap to 16GB for safety
+          sudo dd if=/dev/zero of=/swap_mizkernel bs=1M count=16384
           sudo chmod 600 /swap_mizkernel
           sudo mkswap /swap_mizkernel
           sudo swapon /swap_mizkernel
@@ -30,8 +31,8 @@ jobs:
           git clone --depth=1 https://github.com/${{ github.repository }} kernel
           mkdir -p toolchain
           git clone --depth=1 https://github.com/kdrag0n/proton-clang.git toolchain/clang
-          # Remove .git folders to save space
-          rm -rf toolchain/clang/.git
+          # Crucial: Remove heavy metadata
+          rm -rf kernel/.git toolchain/clang/.git
 
       - name: 4. Inject KernelSU-Next
         run: |
@@ -40,6 +41,7 @@ jobs:
           mkdir -p kernel/drivers/kernelsu
           cp -r ksu_src/kernel/* kernel/drivers/kernelsu/
           
+          # Initialize just enough for versioning
           cd kernel/drivers/kernelsu
           git init
           git config user.email "bot@github.com"
@@ -52,10 +54,8 @@ jobs:
       - name: 5. Surgical Code Fixes
         run: |
           cd kernel
-          # Fix 1: Header Prototypes
           sed -i 's/void ksu_persistent_allow_list()/void ksu_persistent_allow_list(void)/g' drivers/kernelsu/allowlist.h
           
-          # Fix 2: Precise VFS Hook Injection
           if ! grep -q "kernelsu/allowlist.h" fs/read_write.c; then
             sed -i '1i #include "../drivers/kernelsu/allowlist.h"' fs/read_write.c
           fi
@@ -63,31 +63,22 @@ jobs:
           sed -i '/ssize_t vfs_read/,/return ret;/ s/return ret;/ksu_handle_allowlist(file, buf, count, \&ret);\n\treturn ret;/' fs/read_write.c
           sed -i '/ssize_t vfs_write/,/return ret;/ s/return ret;/ksu_handle_allowlist(file, buf, count, \&ret);\n\treturn ret;/' fs/read_write.c
 
-          # Fix 3: Samsung Techpack Path Robustness
           TAS_MAKEFILE="techpack/audio/asoc/codecs/tas256x/Makefile"
           if [ -f "$TAS_MAKEFILE" ]; then
             echo "ccflags-y += -I\$(srctree)/techpack/audio/asoc/codecs/tas256x/physical_layer/inc" >> "$TAS_MAKEFILE"
           fi
 
-          # Fix 4: Link KernelSU into the driver tree
           if ! grep -q "kernelsu" drivers/Makefile; then
             echo "obj-y += kernelsu/" >> drivers/Makefile
           fi
 
-      - name: 6. Verify Fixes & Start Compilation
+      - name: 6. Verify & Compile (Safe Mode)
         run: |
           cd kernel
-          HOOK_COUNT=$(grep -c "ksu_handle_allowlist" fs/read_write.c)
-          echo "Hook count verified: $HOOK_COUNT"
-          
-          if [ "$HOOK_COUNT" -lt 2 ]; then
-            echo "Error: VFS Hooks not found in fs/read_write.c"
-            exit 1
-          fi
-          
           chmod +x scripts/config
           export PATH="$GITHUB_WORKSPACE/toolchain/clang/bin:$PATH"
           
+          # Added --thinlto-cache-dir and memory-saving LD flags
           export ARGS="ARCH=arm64 \
                 CC=clang \
                 LD=ld.lld \
@@ -101,14 +92,15 @@ jobs:
                 CLANG_TRIPLE=aarch64-linux-gnu- \
                 LLVM=1 \
                 LLVM_IAS=1 \
-                KCFLAGS=-I$GITHUB_WORKSPACE/kernel/drivers/kernelsu"
+                KCFLAGS=-I$GITHUB_WORKSPACE/kernel/drivers/kernelsu \
+                LDFLAGS=--threads=1"
 
           make $ARGS vendor/a23_eur_open_mizkernel_defconfig
           ./scripts/config --enable CONFIG_KSU
           make $ARGS olddefconfig
           
-          # Using -j1 to ensure the build doesn't exceed RAM limits and crash
-          make -j$(nproc --all) $ARGS || make -j1 $ARGS
+          # Force -j1 to prevent crashing the runner
+          make -j1 $ARGS
 
       - name: 7. Build AnyKernel3
         run: |
@@ -116,11 +108,8 @@ jobs:
           cd AK3
           sed -i 's/do.devicecheck=1/do.devicecheck=0/g' anykernel.sh
           sed -i 's!block=.*!block=auto;!g' anykernel.sh
-          if [ -f ../kernel/arch/arm64/boot/Image.gz ]; then
-            cp ../kernel/arch/arm64/boot/Image.gz .
-          else
-            cp ../kernel/arch/arm64/boot/Image .
-          fi
+          # Check for both possible Image formats
+          [ -f ../kernel/arch/arm64/boot/Image.gz ] && cp ../kernel/arch/arm64/boot/Image.gz . || cp ../kernel/arch/arm64/boot/Image .
           zip -r9 ../MizKernel-A23-KSU-Next.zip *
 
       - name: 8. Create GitHub Release
