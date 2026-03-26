@@ -1,4 +1,4 @@
-Name: MizKernel-A23-KSU-Next
+name: MizKernel-A23-KSU-Next
 on:
   workflow_dispatch:
 
