@@ -37,6 +37,10 @@ jobs:
           rm -rf kernel/drivers/kernelsu
           mkdir -p kernel/drivers/kernelsu
           cp -r ksu_src/kernel/* kernel/drivers/kernelsu/
+          # Initialize git in kernelsu dir to provide KSU_GIT_VERSION
+          cd kernel/drivers/kernelsu
+          git init && git add . && git commit -m "init ksu"
+          cd ../../../
           rm -rf ksu_src
 
       - name: 5. Surgical Code Fixes
@@ -50,7 +54,6 @@ jobs:
             sed -i '1i #include "../drivers/kernelsu/allowlist.h"' fs/read_write.c
           fi
           
-          # Inject hooks before return ret; in vfs_read and vfs_write
           sed -i '/ssize_t vfs_read/,/return ret;/ s/return ret;/ksu_handle_allowlist(file, buf, count, \&ret);\n\treturn ret;/' fs/read_write.c
           sed -i '/ssize_t vfs_write/,/return ret;/ s/return ret;/ksu_handle_allowlist(file, buf, count, \&ret);\n\treturn ret;/' fs/read_write.c
 
@@ -79,6 +82,7 @@ jobs:
           chmod +x scripts/config
           export PATH="$GITHUB_WORKSPACE/toolchain/clang/bin:$PATH"
           
+          # Fixed KCFLAGS quote and added CLANG_TRIPLE
           export ARGS="ARCH=arm64 \
                 CC=clang \
                 LD=ld.lld \
@@ -98,7 +102,7 @@ jobs:
           ./scripts/config --enable CONFIG_KSU
           make $ARGS olddefconfig
           
-          # Reduced parallelism to prevent memory-related job cancellation
+          # Use -j2 to prevent Out-Of-Memory (OOM) errors on GitHub runners
           make -j2 $ARGS
 
       - name: 7. Build AnyKernel3
