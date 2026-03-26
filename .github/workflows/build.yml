@@ -27,7 +27,7 @@ jobs:
 
       - name: 3. pull source & toolchain
         run: |
-          git clone --depth=1 https://github.com/${{ github.repository }} kernel
+          git clone --depth=1 https://github.com/mdshuvo3/MizKernel-A235F kernel
           mkdir -p toolchain
           git clone --depth=1 https://github.com/kdrag0n/proton-clang.git toolchain/clang
           rm -rf kernel/.git toolchain/clang/.git
@@ -38,49 +38,38 @@ jobs:
           rm -rf kernel/drivers/kernelsu
           mkdir -p kernel/drivers/kernelsu
           cp -r ksu_src/kernel/* kernel/drivers/kernelsu/
-          
-          cd kernel/drivers/kernelsu
-          git init
-          git config user.email "bot@github.com"
-          git config user.name "kernel bot"
-          git add .
-          git commit -m "init ksu"
-          cd ../../../
-          rm -rf ksu_src
+          cd kernel && echo "obj-y += drivers/kernelsu/" >> drivers/Makefile
+          cd .. && rm -rf ksu_src
 
       - name: 5. surgical code fixes
         run: |
           cd kernel
-          # fix function signature in header
+          # Fix allowlist header to prevent static conflicts
+          sed -i 's/static void ksu_handle_allowlist/void ksu_handle_allowlist/g' drivers/kernelsu/allowlist.h 2>/dev/null || true
           sed -i 's/void ksu_persistent_allow_list()/void ksu_persistent_allow_list(void)/g' drivers/kernelsu/allowlist.h
           
-          # refined include: add after last include in fs/read_write.c to avoid declaration conflicts
+          # Add include after standard linux headers
           if ! grep -q "kernelsu/allowlist.h" fs/read_write.c; then
-            sed -i '/#include <linux\/nfs_fs.h>/a #include "../drivers/kernelsu/allowlist.h"' fs/read_write.c
+            sed -i '/#include <linux\/slab.h>/a #include "../drivers/kernelsu/allowlist.h"' fs/read_write.c
           fi
           
-          # inject hooks into vfs_read and vfs_write
+          # Inject hooks into vfs_read and vfs_write
           sed -i '/ssize_t vfs_read/,/return ret;/ s/return ret;/ksu_handle_allowlist(file, buf, count, \&ret);\n\treturn ret;/' fs/read_write.c
           sed -i '/ssize_t vfs_write/,/return ret;/ s/return ret;/ksu_handle_allowlist(file, buf, count, \&ret);\n\treturn ret;/' fs/read_write.c
 
-          # fix audio techpack path
+          # Fix audio driver include paths
           tas_makefile="techpack/audio/asoc/codecs/tas256x/makefile"
           if [ -f "$tas_makefile" ]; then
             echo "ccflags-y += -I\$(srctree)/techpack/audio/asoc/codecs/tas256x/physical_layer/inc" >> "$tas_makefile"
           fi
 
-          # add kernelsu to build system
-          if ! grep -q "kernelsu" drivers/Makefile; then
-            echo "obj-y += kernelsu/" >> drivers/Makefile
-          fi
-
       - name: 6. verify & compile
         run: |
           cd kernel
-          chmod +x scripts/config
           export PATH="$GITHUB_WORKSPACE/toolchain/clang/bin:$PATH"
           
-          export ARGS="ARCH=arm64 \
+          # Compilation Arguments
+          export MAKE_ARGS="ARCH=arm64 \
                 CC=clang \
                 LD=ld.lld \
                 AR=llvm-ar \
@@ -92,16 +81,17 @@ jobs:
                 CROSS_COMPILE_ARM32=arm-linux-gnueabi- \
                 CLANG_TRIPLE=aarch64-linux-gnu- \
                 LLVM=1 \
-                LLVM_IAS=1 \
-                KCFLAGS=-I$GITHUB_WORKSPACE/kernel/drivers/kernelsu \
-                LDFLAGS=--threads=1"
+                LLVM_IAS=1"
 
-          make $ARGS vendor/a23_eur_open_mizkernel_defconfig
+          make $MAKE_ARGS vendor/a23_eur_open_mizkernel_defconfig
+          
+          # Enable KSU
           ./scripts/config --enable CONFIG_KSU
           ./scripts/config --enable CONFIG_KSU_NEXT
-          make $ARGS olddefconfig
+          make $MAKE_ARGS olddefconfig
           
-          make -j$(nproc --all) $ARGS
+          # Build
+          make -j$(nproc --all) $MAKE_ARGS
 
       - name: 7. build anykernel3
         run: |
@@ -110,11 +100,8 @@ jobs:
           sed -i 's/do.devicecheck=1/do.devicecheck=0/g' anykernel.sh
           sed -i 's!block=.*!block=auto;!g' anykernel.sh
           
-          if [ -f ../kernel/arch/arm64/boot/Image.gz ]; then
-            cp ../kernel/arch/arm64/boot/Image.gz .
-          else
-            cp ../kernel/arch/arm64/boot/Image .
-          fi
+          [ -f ../kernel/arch/arm64/boot/Image.gz ] && cp ../kernel/arch/arm64/boot/Image.gz .
+          [ -f ../kernel/arch/arm64/boot/Image ] && cp ../kernel/arch/arm64/boot/Image .
           
           zip -r9 ../mizkernel-a23-ksu-next.zip *
 
