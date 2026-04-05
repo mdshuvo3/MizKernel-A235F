@@ -8,7 +8,7 @@ permissions:
 jobs:
   build:
     runs-on: ubuntu-22.04
-    timeout-minutes: 360  # Prevent timeout failures
+    timeout-minutes: 360
     steps:
       - name: 1. environment setup
         run: |
@@ -20,7 +20,6 @@ jobs:
         run: |
           sudo swapoff -a || true
           sudo rm -f /swap_mizkernel
-          # Increased swap to 16GB to handle high RAM usage during kernel linking
           sudo dd if=/dev/zero of=/swap_mizkernel bs=1M count=16384
           sudo chmod 600 /swap_mizkernel
           sudo mkswap /swap_mizkernel
@@ -69,12 +68,18 @@ jobs:
           export CROSS_COMPILE=aarch64-linux-android-
           export CROSS_COMPILE_ARM32=arm-linux-androideabi-
           
+          # Generate base config
           make O=out vendor/a23_eur_open_mizkernel_defconfig CC=clang
+          
+          # Enable KSU
           chmod +x scripts/config
           ./scripts/config --file out/.config --enable CONFIG_KSU
           ./scripts/config --file out/.config --enable CONFIG_KSU_NEXT
           
-          # FIX: Use -j4 instead of -j$(nproc) to prevent OOM (Out of Memory) crashes
+          # FIX: Handle new Kconfig prompts automatically to prevent "End of file" crash
+          make O=out CC=clang CROSS_COMPILE=$CROSS_COMPILE CROSS_COMPILE_ARM32=$CROSS_COMPILE_ARM32 olddefconfig
+          
+          # Build with limited cores to prevent Memory Exhaustion
           make -j4 O=out \
                CC=clang \
                CLANG_TRIPLE=$CLANG_TRIPLE \
