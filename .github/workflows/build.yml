@@ -8,6 +8,7 @@ permissions:
 jobs:
   build:
     runs-on: ubuntu-22.04
+    timeout-minutes: 360  # Prevent timeout failures
     steps:
       - name: 1. environment setup
         run: |
@@ -19,6 +20,7 @@ jobs:
         run: |
           sudo swapoff -a || true
           sudo rm -f /swap_mizkernel
+          # Increased swap to 16GB to handle high RAM usage during kernel linking
           sudo dd if=/dev/zero of=/swap_mizkernel bs=1M count=16384
           sudo chmod 600 /swap_mizkernel
           sudo mkswap /swap_mizkernel
@@ -30,7 +32,6 @@ jobs:
           git clone --depth=1 https://github.com/mdshuvo3/MizKernel-A235F kernel
           mkdir -p toolchain
           git clone --depth=1 https://github.com/kdrag0n/proton-clang.git toolchain/clang
-          # Get a GCC toolchain for complementary headers if needed
           git clone --depth=1 https://github.com/LineageOS/android_prebuilts_gcc_linux-x86_aarch64_aarch64-linux-android-4.9.git toolchain/gcc64
           git clone --depth=1 https://github.com/LineageOS/android_prebuilts_gcc_linux-x86_arm_arm-linux-androideabi-4.9.git toolchain/gcc32
           rm -rf kernel/.git toolchain/clang/.git toolchain/gcc64/.git toolchain/gcc32/.git
@@ -47,11 +48,9 @@ jobs:
       - name: 5. surgical code fixes
         run: |
           cd kernel
-          # Fix Kernelsu-Next allowlist headers
           sed -i 's/static void ksu_handle_allowlist/void ksu_handle_allowlist/g' drivers/kernelsu/allowlist.h 2>/dev/null || true
           sed -i 's/void ksu_persistent_allow_list()/void ksu_persistent_allow_list(void)/g' drivers/kernelsu/allowlist.h
           
-          # Inject hooks into VFS
           if ! grep -q "kernelsu/allowlist.h" fs/read_write.c; then
             sed -i '/#include <linux\/slab.h>/a #include "../drivers/kernelsu/allowlist.h"' fs/read_write.c
           fi
@@ -63,29 +62,20 @@ jobs:
         run: |
           cd kernel
           export PATH="$GITHUB_WORKSPACE/toolchain/clang/bin:$GITHUB_WORKSPACE/toolchain/gcc64/bin:$GITHUB_WORKSPACE/toolchain/gcc32/bin:$PATH"
-          
-          # Define standard Android build environment
           export ARCH=arm64
           export KBUILD_BUILD_USER=miz
           export KBUILD_BUILD_HOST=github-actions
-          
-          # Use traditional flags that 4.19 kernels expect
           export CLANG_TRIPLE=aarch64-linux-gnu-
           export CROSS_COMPILE=aarch64-linux-android-
           export CROSS_COMPILE_ARM32=arm-linux-androideabi-
           
-          # Generate config
           make O=out vendor/a23_eur_open_mizkernel_defconfig CC=clang
-          
-          # FIX: Grant execution permission to the config script
           chmod +x scripts/config
-          
-          # Enable KSU
           ./scripts/config --file out/.config --enable CONFIG_KSU
           ./scripts/config --file out/.config --enable CONFIG_KSU_NEXT
           
-          # Build the kernel
-          make -j$(nproc) O=out \
+          # FIX: Use -j4 instead of -j$(nproc) to prevent OOM (Out of Memory) crashes
+          make -j4 O=out \
                CC=clang \
                CLANG_TRIPLE=$CLANG_TRIPLE \
                CROSS_COMPILE=$CROSS_COMPILE \
@@ -104,7 +94,6 @@ jobs:
           sed -i 's/do.devicecheck=1/do.devicecheck=0/g' anykernel.sh
           sed -i 's!block=.*!block=auto;!g' anykernel.sh
           
-          # Copy the built Image from the 'out' directory
           if [ -f ../kernel/out/arch/arm64/boot/Image.gz ]; then
             cp ../kernel/out/arch/arm64/boot/Image.gz .
           elif [ -f ../kernel/out/arch/arm64/boot/Image ]; then
