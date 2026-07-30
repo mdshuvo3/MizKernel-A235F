@@ -84,10 +84,11 @@ jobs:
           # Generate base config
           make O=out vendor/a23_eur_open_mizkernel_defconfig CC=clang
           
-          # Enable KSU
+          # Enable KSU & disable MODVERSIONS to fix relocation error in ld.lld
           chmod +x scripts/config
           ./scripts/config --file out/.config --enable CONFIG_KSU
           ./scripts/config --file out/.config --enable CONFIG_KSU_NEXT
+          ./scripts/config --file out/.config --disable CONFIG_MODVERSIONS
           
           # Handle new Kconfig prompts automatically
           make O=out CC=clang CROSS_COMPILE=$CROSS_COMPILE CROSS_COMPILE_ARM32=$CROSS_COMPILE_ARM32 olddefconfig
