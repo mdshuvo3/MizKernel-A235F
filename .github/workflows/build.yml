@@ -1,21 +1,131 @@
-name: Build Kernel
-
+name: mizkernel-a23-ksu-next
 on:
-  workflow_dispatch:  # <--- THIS ENABLES THE "RUN WORKFLOW" BUTTON
-  push:
-    branches: [ main ]
+  workflow_dispatch:
+
+permissions:
+  contents: write
 
 jobs:
   build:
     runs-on: ubuntu-22.04
+    timeout-minutes: 360
     steps:
-      - name: Checkout Code
-        uses: actions/checkout@v4
+      - name: 1. environment setup
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y bc bison build-essential ccache curl flex g++-multilib gcc-multilib git gnupg gperf libelf-dev liblz4-tool libncurses-dev libsdl1.2-dev libssl-dev libxml2 libxml2-utils rsync squashfs-tools xsltproc zip zlib1g-dev python3 binutils-aarch64-linux-gnu device-tree-compiler
+          sudo ln -sf /usr/bin/python3 /usr/bin/python
 
-      # ... your other setup steps ...
+      - name: 2. maximize build space & ram
+        run: |
+          sudo swapoff -a || true
+          sudo rm -f /swap_mizkernel
+          sudo dd if=/dev/zero of=/swap_mizkernel bs=1M count=16384
+          sudo chmod 600 /swap_mizkernel
+          sudo mkswap /swap_mizkernel
+          sudo swapon /swap_mizkernel
+          free -h
 
-      - name: Compile Kernel
+      - name: 3. pull source & toolchain
+        run: |
+          git clone --depth=1 https://github.com/mdshuvo3/MizKernel-A235F kernel
+          mkdir -p toolchain
+          git clone --depth=1 https://github.com/kdrag0n/proton-clang.git toolchain/clang
+          git clone --depth=1 https://github.com/LineageOS/android_prebuilts_gcc_linux-x86_aarch64_aarch64-linux-android-4.9.git toolchain/gcc64
+          git clone --depth=1 https://github.com/LineageOS/android_prebuilts_gcc_linux-x86_arm_arm-linux-androideabi-4.9.git toolchain/gcc32
+          rm -rf kernel/.git toolchain/clang/.git toolchain/gcc64/.git toolchain/gcc32/.git
+
+      - name: 4. inject kernelsu-next
+        run: |
+          # 1. Clear out existing broken symlink or folder
+          rm -rf kernel/drivers/kernelsu
+          mkdir -p kernel/drivers/kernelsu
+
+          # 2. Clone KernelSU-Next to temporary directory
+          git clone --depth=1 https://github.com/rifsxd/KernelSU-Next ksu_temp
+
+          # 3. Copy kernel drivers from ksu_temp into drivers/kernelsu
+          if [ -d "ksu_temp/kernel" ]; then
+            cp -r ksu_temp/kernel/* kernel/drivers/kernelsu/
+          elif [ -d "ksu_temp/ksu" ]; then
+            cp -r ksu_temp/ksu/* kernel/drivers/kernelsu/
+          fi
+
+          # 4. Clean up temporary clone
+          rm -rf ksu_temp
+
+          # Debug: verify Kconfig actually exists now
+          ls -la kernel/drivers/kernelsu/
+
+      - name: 5. verify and fix drivers hooks
         run: |
           cd kernel
-          make O=out ARCH=arm64 vendor/a23_defconfig
-          make O=out ARCH=arm64 CONFIG_SECTION_MISMATCH_WARN_ONLY=y -j$(nproc)
+          # Ensure drivers/Kconfig includes KSU
+          if ! grep -q "drivers/kernelsu/Kconfig" drivers/Kconfig; then
+            echo 'source "drivers/kernelsu/Kconfig"' >> drivers/Kconfig
+          fi
+
+          # Ensure drivers/Makefile includes KSU
+          if ! grep -q "obj-y += drivers/kernelsu/" drivers/Makefile; then
+            echo 'obj-y += drivers/kernelsu/' >> drivers/Makefile
+          fi
+
+      - name: 6. verify & compile
+        run: |
+          cd kernel
+          export PATH="$GITHUB_WORKSPACE/toolchain/clang/bin:$GITHUB_WORKSPACE/toolchain/gcc64/bin:$GITHUB_WORKSPACE/toolchain/gcc32/bin:$PATH"
+          export ARCH=arm64
+          export KBUILD_BUILD_USER=miz
+          export KBUILD_BUILD_HOST=github-actions
+          export CLANG_TRIPLE=aarch64-linux-gnu-
+          export CROSS_COMPILE=aarch64-linux-android-
+          export CROSS_COMPILE_ARM32=arm-linux-androideabi-
+          
+          # Generate base config
+          make O=out vendor/a23_eur_open_mizkernel_defconfig CC=clang
+          
+          # Enable KSU
+          chmod +x scripts/config
+          ./scripts/config --file out/.config --enable CONFIG_KSU
+          ./scripts/config --file out/.config --enable CONFIG_KSU_NEXT
+          
+          # Handle new Kconfig prompts automatically
+          make O=out CC=clang CROSS_COMPILE=$CROSS_COMPILE CROSS_COMPILE_ARM32=$CROSS_COMPILE_ARM32 olddefconfig
+          
+          # Build kernel with Section Mismatch bypass flag
+          make -j$(nproc) O=out \
+               CC=clang \
+               CLANG_TRIPLE=$CLANG_TRIPLE \
+               CROSS_COMPILE=$CROSS_COMPILE \
+               CROSS_COMPILE_ARM32=$CROSS_COMPILE_ARM32 \
+               LD=ld.lld \
+               AR=llvm-ar \
+               NM=llvm-nm \
+               OBJCOPY=llvm-objcopy \
+               OBJDUMP=llvm-objdump \
+               STRIP=llvm-strip \
+               CONFIG_SECTION_MISMATCH_WARN_ONLY=y
+
+      - name: 7. build anykernel3
+        run: |
+          git clone --depth=1 https://github.com/osm0sis/AnyKernel3.git ak3
+          cd ak3
+          sed -i 's/do.devicecheck=1/do.devicecheck=0/g' anykernel.sh
+          sed -i 's!block=.*!block=auto;!g' anykernel.sh
+          
+          if [ -f ../kernel/out/arch/arm64/boot/Image.gz ]; then
+            cp ../kernel/out/arch/arm64/boot/Image.gz .
+          elif [ -f ../kernel/out/arch/arm64/boot/Image ]; then
+            cp ../kernel/out/arch/arm64/boot/Image .
+          fi
+          
+          zip -r9 ../mizkernel-a23-ksu-next.zip *
+
+      - name: 8. create github release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: mizkernel-a235f-${{ github.run_id }}
+          name: mizkernel a235f build ${{ github.run_number }}
+          files: mizkernel-a23-ksu-next.zip
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
