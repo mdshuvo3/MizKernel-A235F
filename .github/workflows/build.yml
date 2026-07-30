@@ -93,7 +93,7 @@ jobs:
           make O=out CC=clang CROSS_COMPILE=$CROSS_COMPILE CROSS_COMPILE_ARM32=$CROSS_COMPILE_ARM32 olddefconfig
           
           # Build kernel
-          make -j4 O=out \
+          make -j1 O=out \
                CC=clang \
                CLANG_TRIPLE=$CLANG_TRIPLE \
                CROSS_COMPILE=$CROSS_COMPILE \
