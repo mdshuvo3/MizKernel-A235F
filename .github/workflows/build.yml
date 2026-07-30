@@ -37,12 +37,25 @@ jobs:
 
       - name: 4. inject kernelsu-next
         run: |
-          # Remove broken symlink/folder in drivers/
+          # 1. Clear out existing broken symlink or folder
           rm -rf kernel/drivers/kernelsu
-          
-          # Clone KernelSU-Next directly as drivers/kernelsu
-          git clone --depth=1 https://github.com/rifsxd/KernelSU-Next kernel/drivers/kernelsu
-          rm -rf kernel/drivers/kernelsu/.git
+          mkdir -p kernel/drivers/kernelsu
+
+          # 2. Clone KernelSU-Next to temporary directory
+          git clone --depth=1 https://github.com/rifsxd/KernelSU-Next ksu_temp
+
+          # 3. Copy kernel drivers from ksu_temp into drivers/kernelsu
+          if [ -d "ksu_temp/kernel" ]; then
+            cp -r ksu_temp/kernel/* kernel/drivers/kernelsu/
+          elif [ -d "ksu_temp/ksu" ]; then
+            cp -r ksu_temp/ksu/* kernel/drivers/kernelsu/
+          fi
+
+          # 4. Clean up temporary clone
+          rm -rf ksu_temp
+
+          # Debug: verify Kconfig actually exists now
+          ls -la kernel/drivers/kernelsu/
 
       - name: 5. verify and fix drivers hooks
         run: |
