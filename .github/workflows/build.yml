@@ -1,4 +1,20 @@
-- name: Build Kernel
+name: Build Kernel
+
+on:
+  workflow_dispatch:  # <--- THIS ENABLES THE "RUN WORKFLOW" BUTTON
+  push:
+    branches: [ main ]
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      # ... your other setup steps ...
+
+      - name: Compile Kernel
         run: |
           cd kernel
           make O=out ARCH=arm64 vendor/a23_defconfig
