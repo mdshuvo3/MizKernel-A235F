@@ -1,19 +1,68 @@
-Linux kernel
-============
+# MizKernel for Samsung Galaxy A23 (SM-A235F)
 
-There are several guides for kernel developers and users. These guides can
-be rendered in a number of formats, like HTML and PDF. Please read
-Documentation/admin-guide/README.rst first.
+[![Build KernelSU-Next](https://github.com/mdshuvo3/MizKernel-A235F/actions/workflows/build.yml/badge.svg)](https://github.com/mdshuvo3/MizKernel-A235F/actions)
+[![KernelSU-Next](https://img.shields.io/badge/KernelSU--Next-Supported-brightgreen)](https://github.com/rifsxd/KernelSU-Next)
+[![Toolchain](https://img.shields.io/badge/Toolchain-Proton--Clang%2013-blue)](https://github.com/kdrag0n/proton-clang)
 
-In order to build the documentation, use ``make htmldocs`` or
-``make pdfdocs``.  The formatted documentation can also be read online at:
+A custom, high-performance kernel built from source for the **Samsung Galaxy A23 (SM-A235F)**, featuring integrated **KernelSU-Next** for modern, systemless, kernel-based superuser access.
 
-    https://www.kernel.org/doc/html/latest/
+---
 
-There are various text files in the Documentation/ subdirectory,
-several of them using the Restructured Text markup notation.
-See Documentation/00-INDEX for a list of what is contained in each file.
+## 🌟 Highlights & Features
 
-Please read the Documentation/process/changes.rst file, as it contains the
-requirements for building and running the kernel, and information about
-the problems which may result by upgrading your kernel.
+* **KernelSU-Next Integration:** Direct kernel-level root support compiled straight into `drivers/kernelsu/`.
+* **Clang/LLVM Optimized:** Built using Proton Clang paired with ARM64/ARM32 GCC 4.9 cross-compilers.
+* **Bypassed Legacy DTBO Constraints:** Targets the `Image.gz` binary directly, maintaining compatibility with stock vendor device tree overlays.
+* **Flashable Package:** Packaged automatically via AnyKernel3 for effortless flashing in custom recoveries without modifying `/system` or `/vendor`.
+
+---
+
+## 🛠️ The Story Behind the Build
+
+Building custom kernels for modern Samsung devices—especially porting next-generation kernel root frameworks into older vendor trees—is notorious for CI pipeline failures. 
+
+After **102 workflow runs**, systematic log debugging, and pair-programming with AI, the build pipeline conquered several major roadblocks:
+
+1. **Automated Source Patching:** Injected KernelSU-Next directly into the kernel source during CI execution, dynamically linking `drivers/Kconfig` and `drivers/Makefile`.
+2. **DTBO Compiler Bypass:** Fixed vendor syntax errors by instructing the build system to output `Image.gz` directly, avoiding unnecessary overlay re-compilation.
+3. **LLD Relocation Error Fix:** Resolved a critical `ld.lld` crash (`relocation R_AARCH64_ABS32 cannot be used against symbol __crc_...`) during `vmlinux` linking by disabling `CONFIG_MODVERSIONS`.
+
+---
+
+## 📥 Installation
+
+### Prerequisites
+* Unlocked Bootloader (SM-A235F).
+* Custom Recovery (TWRP / SHRP) or Kernel Flasher app.
+* [KernelSU-Next Manager APK](https://github.com/rifsxd/KernelSU-Next/releases) installed on your device.
+
+### Flashing Instructions
+1. **Backup:** Always create a full backup of your current `boot.img` or stock firmware before flashing.
+2. Download the latest `mizkernel-a23-ksu-next.zip` from [Releases](../../releases).
+3. Boot into TWRP / custom recovery.
+4. Flash `mizkernel-a23-ksu-next.zip`.
+5. Reboot to System.
+6. Open the **KernelSU-Next** app to confirm root status and manage permissions.
+
+---
+
+## ⚙️ Build Infrastructure
+
+The kernel is built automatically using GitHub Actions. Below are the key environment configurations:
+
+| Parameter | Value |
+| :--- | :--- |
+| **Target Architecture** | `arm64` |
+| **Defconfig** | `vendor/a23_eur_open_mizkernel_defconfig` |
+| **Compiler** | Proton Clang (`aarch64-linux-gnu-`) |
+| **Linker** | `ld.lld` |
+| **Build Host** | Ubuntu 22.04 LTS (GitHub Actions) |
+
+---
+
+## 📜 Credits & Acknowledgments
+
+* **[KernelSU-Next Team](https://github.com/rifsxd/KernelSU-Next)** for the root implementation.
+* **[Osm0sis](https://github.com/osm0sis)** for AnyKernel3.
+* **[kdrag0n](https://github.com/kdrag0n)** for the Proton-Clang toolchain.
+* **AI Collaborator** for assisting through 102 runs of build log analysis and CI pipeline optimization.
