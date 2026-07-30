@@ -92,7 +92,7 @@ jobs:
           # Handle new Kconfig prompts automatically
           make O=out CC=clang CROSS_COMPILE=$CROSS_COMPILE CROSS_COMPILE_ARM32=$CROSS_COMPILE_ARM32 olddefconfig
           
-          # Build kernel with Section Mismatch bypass flag
+          # Build ONLY Image.gz (skips DTBO compilation)
           make -j$(nproc) O=out \
                CC=clang \
                CLANG_TRIPLE=$CLANG_TRIPLE \
@@ -104,7 +104,8 @@ jobs:
                OBJCOPY=llvm-objcopy \
                OBJDUMP=llvm-objdump \
                STRIP=llvm-strip \
-               CONFIG_SECTION_MISMATCH_WARN_ONLY=y
+               CONFIG_SECTION_MISMATCH_WARN_ONLY=y \
+               Image.gz
 
       - name: 7. build anykernel3
         run: |
