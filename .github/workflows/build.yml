@@ -37,25 +37,15 @@ jobs:
 
       - name: 4. inject kernelsu-next
         run: |
-          git clone --depth=1 https://github.com/rifsxd/KernelSU-Next ksu_src
-          rm -rf kernel/drivers/kernelsu
-          mkdir -p kernel/drivers/kernelsu
-          cp -r ksu_src/kernel/* kernel/drivers/kernelsu/
-          cd kernel && echo "obj-y += drivers/kernelsu/" >> drivers/Makefile
-          cd .. && rm -rf ksu_src
+          cd kernel
+          curl -LSs "https://raw.githubusercontent.com/rifsxd/KernelSU-Next/next/kernel/setup.sh" | bash -s next
 
       - name: 5. surgical code fixes
         run: |
           cd kernel
-          sed -i 's/static void ksu_handle_allowlist/void ksu_handle_allowlist/g' drivers/kernelsu/allowlist.h 2>/dev/null || true
-          sed -i 's/void ksu_persistent_allow_list()/void ksu_persistent_allow_list(void)/g' drivers/kernelsu/allowlist.h
-          
-          if ! grep -q "kernelsu/allowlist.h" fs/read_write.c; then
-            sed -i '/#include <linux\/slab.h>/a #include "../drivers/kernelsu/allowlist.h"' fs/read_write.c
+          if ! grep -q "obj-y += drivers/kernelsu/" drivers/Makefile; then
+            echo "obj-y += drivers/kernelsu/" >> drivers/Makefile
           fi
-          
-          sed -i '/ssize_t vfs_read/,/return ret;/ s/return ret;/ksu_handle_allowlist(file, buf, count, \&ret);\n\treturn ret;/' fs/read_write.c
-          sed -i '/ssize_t vfs_write/,/return ret;/ s/return ret;/ksu_handle_allowlist(file, buf, count, \&ret);\n\treturn ret;/' fs/read_write.c
 
       - name: 6. verify & compile
         run: |
@@ -76,10 +66,10 @@ jobs:
           ./scripts/config --file out/.config --enable CONFIG_KSU
           ./scripts/config --file out/.config --enable CONFIG_KSU_NEXT
           
-          # FIX: Handle new Kconfig prompts automatically to prevent "End of file" crash
+          # Handle new Kconfig prompts automatically
           make O=out CC=clang CROSS_COMPILE=$CROSS_COMPILE CROSS_COMPILE_ARM32=$CROSS_COMPILE_ARM32 olddefconfig
           
-          # Build with limited cores to prevent Memory Exhaustion
+          # Build kernel
           make -j4 O=out \
                CC=clang \
                CLANG_TRIPLE=$CLANG_TRIPLE \
