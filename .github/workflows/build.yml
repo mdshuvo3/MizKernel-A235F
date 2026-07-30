@@ -37,19 +37,22 @@ jobs:
 
       - name: 4. inject kernelsu-next
         run: |
-          cd kernel
-          # Download and run KSU-Next setup script safely
-          curl -LSs "https://raw.githubusercontent.com/rifsxd/KernelSU-Next/next/kernel/setup.sh" | bash -s next
+          # Remove broken symlink/folder in drivers/
+          rm -rf kernel/drivers/kernelsu
+          
+          # Clone KernelSU-Next directly as drivers/kernelsu
+          git clone --depth=1 https://github.com/rifsxd/KernelSU-Next kernel/drivers/kernelsu
+          rm -rf kernel/drivers/kernelsu/.git
 
       - name: 5. verify and fix drivers hooks
         run: |
           cd kernel
-          # Ensure drivers/Kconfig has the source entry
+          # Ensure drivers/Kconfig includes KSU
           if ! grep -q "drivers/kernelsu/Kconfig" drivers/Kconfig; then
             echo 'source "drivers/kernelsu/Kconfig"' >> drivers/Kconfig
           fi
 
-          # Ensure drivers/Makefile has the obj entry
+          # Ensure drivers/Makefile includes KSU
           if ! grep -q "obj-y += drivers/kernelsu/" drivers/Makefile; then
             echo 'obj-y += drivers/kernelsu/' >> drivers/Makefile
           fi
